@@ -1,0 +1,4 @@
+# LLM provider SDKs. Install only the one(s) you plan to use.
+# `mock` provider (default) needs none of these.
+ibm-watsonx-ai>=1.1.0
+openai>=1.40.0

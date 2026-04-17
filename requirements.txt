@@ -1,0 +1,14 @@
+# Core — works on Python 3.10–3.14 (prebuilt wheels on every major OS).
+streamlit>=1.31
+python-dotenv>=1.0
+pandas>=2.2.3
+numpy>=1.26
+scikit-learn>=1.3
+requests>=2.31
+plotly>=5.20
+joblib>=1.3
+
+# LLM providers (all optional — the "mock" provider needs none of them).
+# Uncomment the one you plan to use, or install via `pip install -r requirements-llm.txt`.
+# ibm-watsonx-ai>=1.1.0
+# openai>=1.40.0
