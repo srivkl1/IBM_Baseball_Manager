@@ -1,7 +1,7 @@
-"""Build the draftable player universe from the 3-year stat window.
+"""Build the draftable player universe from the recent seasons ending at the target year.
 
 For each player we compute:
-  - agg_war: sum of last 3 seasons' WAR (plus-stats scaled for pitchers)
+  - avg_war: average WAR across the recent-history window
   - recent_form: most-recent season performance index
   - proj_points: fantasy-points projection for a standard rotisserie league
   - tier: 1 (elite) … 6 (deep bench)
@@ -36,7 +36,7 @@ def _pitcher_points(row: pd.Series) -> float:
 
 def build_pool() -> pd.DataFrame:
     frames = []
-    for season in CONFIG.allowed_seasons:
+    for season in CONFIG.recent_history_seasons:
         b = pyb.batting_stats(season).copy()
         b["role"] = "BAT"
         b["fantasy_pts"] = b.apply(_hitter_points, axis=1)
@@ -54,16 +54,16 @@ def build_pool() -> pd.DataFrame:
     )
 
     agg = (long.groupby(["Name", "role"], as_index=False)
-                .agg(agg_war=("WAR", "sum"),
+                .agg(avg_war=("WAR", "mean"),
                      avg_pts=("fantasy_pts", "mean")))
     pool = agg.merge(recent, on=["Name", "role"], how="left")
     pool["recent_pts"] = pool["recent_pts"].fillna(pool["avg_pts"])
-    pool["recent_war"] = pool["recent_war"].fillna(pool["agg_war"] / 3.0)
+    pool["recent_war"] = pool["recent_war"].fillna(pool["avg_war"])
 
-    # Composite draft score: weight recent form slightly higher than 3yr avg.
+    # Composite draft score: weight recent form slightly higher than the recent-window average.
     pool["draft_score"] = (0.55 * pool["recent_pts"]
                            + 0.30 * pool["avg_pts"]
-                           + 1.5 * pool["agg_war"])
+                           + 1.5 * (pool["recent_war"] + pool["avg_war"]))
     pool = pool.sort_values("draft_score", ascending=False).reset_index(drop=True)
     pool["rank"] = pool.index + 1
     pool["tier"] = pd.cut(pool["rank"],

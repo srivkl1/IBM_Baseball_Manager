@@ -4,7 +4,7 @@ End-to-end agentic AI MVP for the IBM Experiential AI Learning Lab.
 
 A 4-agent pipeline (Orchestrator → Data Retrieval → Analysis → Explanation)
 that powers an interactive **snake-draft simulator**, a **season tracker**
-with historical 2025 replay, and a pluggable LLM backend (IBM watsonx.ai,
+with historical 2026 replay, and a pluggable LLM backend (IBM watsonx.ai,
 any OpenAI-compatible endpoint, or a deterministic mock for offline demos).
 
 ---
@@ -43,9 +43,14 @@ CUSTOM_LLM_MODEL=llama-3.1-8b-instruct
 
 # Optional ESPN private-league credentials.
 ESPN_LEAGUE_ID=
-ESPN_SEASON=2025
+ESPN_SEASON=2026
 ESPN_SWID=
 ESPN_S2=
+
+# Historical data window and draft target season.
+DATA_START_SEASON=2000
+TARGET_SEASON=2026
+RECENT_HISTORY_WINDOW=3
 ```
 
 ## 3 · Architecture
@@ -68,13 +73,15 @@ ESPN_S2=
   using a rules-first pass, falling back to the LLM for low-confidence cases,
   and emits a typed data request.
 * **Agent 2 — Data Retrieval** (`backend/agents/data_retrieval.py`) pulls
-  three-year FanGraphs + Statcast player data via `pybaseball`, FanGraphs top
-  prospects, and ESPN league state via `espn-api`. Everything is disk-cached.
+  historical FanGraphs player data across 2000–2026 via `pybaseball`,
+  FanGraphs top prospects, and ESPN league state via `espn-api`. Everything is
+  disk-cached.
 * **Agent 3 — Analysis** (`backend/agents/analysis.py`) calls the draft
   simulator (`backend/draft/simulator.py`) and the ML draft optimizer
   (`backend/models/draft_optimizer.py`, Gradient Boosted Regressor trained on
-  2023 → 2024 transitions and evaluated OOT on 2024 → 2025) to rank candidates
-  for the team on the clock, weighted by roster needs.
+  historical year-to-year transitions from 2000 → 2001 through 2024 → 2025 and
+  evaluated OOT on 2025 → 2026) to rank candidates for the team on the clock,
+  weighted by roster needs.
 * **Agent 4 — Explanation** (`backend/agents/explanation.py`) rewrites the
   structured recommendation in plain English, tone calibrated to
   `beginner`/`expert`, then self-evaluates the output.
@@ -89,16 +96,17 @@ expandable "agent trace" panel.
 * **Draft Room** — live snake draft; CPU opponents pick with a BPA +
   positional-need strategy and the agent suggests your pick each round.
 * **Season Tracker** — pick an as-of date (top-right) anywhere in the
-  2025 MLB season and watch standings evolve; historical replay lets you
+  2026 MLB season and watch standings evolve; historical replay lets you
   stress-test your draft.
 * **Model Lab** — retrain and inspect the ML optimizer's OOT metrics.
 
 ## 5 · Data scope
 
 Per spec:
-* **3-year scope**: 2023, 2024, 2025.
-* **Train**: 2023 + 2024 (`prior-season features → next-season fantasy pts`).
-* **OOT**: 2024 → 2025.
+* **Historical scope**: 2000 through 2026.
+* **Draft pool**: recent-history window ending in 2026 (defaults to 2024–2026).
+* **Train**: year-to-year transitions from 2000 → 2001 through 2024 → 2025.
+* **OOT**: 2025 → 2026.
 * Player pool is built from `pybaseball.batting_stats()` +
   `pybaseball.pitching_stats()` with FanGraphs advanced metrics (wRC+, wOBA,
   ISO, Barrel%, HardHit%, FIP, xFIP, K%, BB%, WAR, …).

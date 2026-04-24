@@ -1,7 +1,8 @@
 """Agent 2 — Data Retrieval.
 
 Given a structured request from the Orchestrator, gather:
-  - 3-year player pool (from pybaseball)
+  - historical player data from 2000 through the target season
+  - a draft pool built from the most recent seasons ending at the target year
   - per-player Statcast / FanGraphs rows
   - top prospects
   - ESPN league snapshot (rosters, free agents, scoring)

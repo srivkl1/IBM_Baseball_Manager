@@ -3,8 +3,6 @@
 We pull:
   - batting_stats(year): FanGraphs standard + advanced (WAR, wRC+, ISO, wOBA, …)
   - pitching_stats(year): FanGraphs pitching (WAR, FIP, xFIP, K%, BB%, …)
-  - statcast_batter / statcast_pitcher: per-player rolling Statcast metrics
-  - schedule_and_record: team MLB schedule
   - prospects: FanGraphs top prospects
 
 If pybaseball isn't installed or network is blocked, we synthesize a
@@ -141,7 +139,7 @@ def _synth_pitching(season: int) -> pd.DataFrame:
 
 def batting_stats(season: int) -> pd.DataFrame:
     if season not in CONFIG.allowed_seasons:
-        raise ValueError(f"Season {season} outside 3-year window {CONFIG.allowed_seasons}")
+        raise ValueError(f"Season {season} outside supported range {CONFIG.allowed_seasons[0]}-{CONFIG.allowed_seasons[-1]}")
     if _HAVE_PB:
         try:
             return _batting_stats_real(season)
@@ -152,7 +150,7 @@ def batting_stats(season: int) -> pd.DataFrame:
 
 def pitching_stats(season: int) -> pd.DataFrame:
     if season not in CONFIG.allowed_seasons:
-        raise ValueError(f"Season {season} outside 3-year window {CONFIG.allowed_seasons}")
+        raise ValueError(f"Season {season} outside supported range {CONFIG.allowed_seasons[0]}-{CONFIG.allowed_seasons[-1]}")
     if _HAVE_PB:
         try:
             return _pitching_stats_real(season)
@@ -179,8 +177,8 @@ def prospects(season: int) -> pd.DataFrame:
     })
 
 
-def three_year_pool() -> pd.DataFrame:
-    """Concatenated hitter+pitcher rows across the 3-year scope, with 'role'."""
+def historical_pool() -> pd.DataFrame:
+    """Concatenated hitter+pitcher rows across the full supported history, with `role`."""
     frames = []
     for season in CONFIG.allowed_seasons:
         b = batting_stats(season).copy()
@@ -191,6 +189,11 @@ def three_year_pool() -> pd.DataFrame:
         frames.append(p)
     df = pd.concat(frames, ignore_index=True)
     return df
+
+
+def three_year_pool() -> pd.DataFrame:
+    """Backward-compatible alias for the historical player pool."""
+    return historical_pool()
 
 
 def have_real_data() -> bool:

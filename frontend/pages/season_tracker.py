@@ -1,16 +1,15 @@
 """Season tracker & historical replay.
 
-Pick any date in the 2025 season (Mar 27 – Sep 28). We approximate
+Pick any date in the target season (Mar 27 – Sep 28). We approximate
 accumulated fantasy points up to that date and rank every team.
 """
 from __future__ import annotations
-
-from datetime import date
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from backend.config import CONFIG
 from backend.draft.scorer import (SEASON_END, SEASON_START, standings,
                                   player_weekly_trajectory)
 from frontend.components import agent_trace, recommendation_card
@@ -18,7 +17,7 @@ from frontend.theme import PALETTE, page_header
 
 
 def render():
-    page_header("Season Tracker", "Historical replay of your 2025 draft.")
+    page_header("Season Tracker", f"Historical replay of your {CONFIG.oot_season} draft.")
 
     state = st.session_state.get("draft_state")
     if state is None or not state.rosters.get(state.teams[state.human_index]):
@@ -28,7 +27,8 @@ def render():
     # Date picker lives top-right per requirements.
     _, right = st.columns([4, 1])
     with right:
-        as_of = st.date_input("As-of date", value=date(2025, 7, 15),
+        midpoint = SEASON_START + (SEASON_END - SEASON_START) / 2
+        as_of = st.date_input("As-of date", value=midpoint,
                               min_value=SEASON_START, max_value=SEASON_END)
 
     table = standings(state.rosters, as_of)

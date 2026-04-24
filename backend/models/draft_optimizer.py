@@ -1,17 +1,14 @@
 """Gradient-boosted regressor that predicts next-season fantasy points.
 
-Train on 2023 -> 2024 transitions (features from 2023, label = 2024 pts).
-Validate on 2024 -> 2025 as an OOT sample.
-Inference: apply 2024 features to score 2025 draft candidates.
+Train on year-to-year transitions across the configured historical range.
+Validate on the final transition into the target season.
+Inference: apply (season-1) features to score draft candidates for `season`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
 
 import joblib
-import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -20,7 +17,7 @@ from backend.config import CONFIG
 from backend.data import pybaseball_client as pyb
 from backend.draft.player_pool import _hitter_points, _pitcher_points
 
-_MODEL_PATH = CONFIG.data_cache_dir / "draft_optimizer.joblib"
+_MODEL_PATH = CONFIG.data_cache_dir / "draft_optimizer_2000_2026.joblib"
 
 BAT_FEATURES = ["PA", "HR", "R", "RBI", "SB", "AVG", "OBP", "SLG", "wOBA",
                 "wRC+", "ISO", "BB%", "K%", "Barrel%", "HardHit%", "WAR"]
@@ -29,8 +26,9 @@ PIT_FEATURES = ["IP", "K", "ERA", "FIP", "xFIP", "WHIP", "K%", "BB%", "W", "SV",
 
 @dataclass
 class OptimizerMetrics:
-    train_seasons: tuple
-    oot_season: int
+    train_range: tuple
+    train_pairs: int
+    oot_pair: tuple
     mae_bat_oot: float
     mae_pit_oot: float
     r2_bat_oot: float
@@ -50,14 +48,31 @@ def _join_year_pair(season_a: int, season_b: int) -> tuple[pd.DataFrame, pd.Data
     return bat, pit
 
 
+def _training_pairs() -> list[tuple[int, int]]:
+    seasons = list(CONFIG.allowed_seasons)
+    return list(zip(seasons[:-2], seasons[1:-1]))
+
+
 def train_and_evaluate(force: bool = False) -> OptimizerMetrics:
     if _MODEL_PATH.exists() and not force:
         bundle = joblib.load(_MODEL_PATH)
         return bundle["metrics"]
 
-    train_a, train_b = CONFIG.train_seasons  # (2023, 2024)
-    bat_train, pit_train = _join_year_pair(train_a, train_b)
-    bat_oot, pit_oot = _join_year_pair(train_b, CONFIG.oot_season)  # 2024 -> 2025
+    training_pairs = _training_pairs()
+    if not training_pairs:
+        raise ValueError("Need at least three seasons to train and evaluate the optimizer.")
+
+    bat_train_frames = []
+    pit_train_frames = []
+    for season_a, season_b in training_pairs:
+        bat_pair, pit_pair = _join_year_pair(season_a, season_b)
+        bat_train_frames.append(bat_pair)
+        pit_train_frames.append(pit_pair)
+
+    bat_train = pd.concat(bat_train_frames, ignore_index=True)
+    pit_train = pd.concat(pit_train_frames, ignore_index=True)
+    oot_pair = (CONFIG.oot_season - 1, CONFIG.oot_season)
+    bat_oot, pit_oot = _join_year_pair(*oot_pair)
 
     bat_model = GradientBoostingRegressor(random_state=42).fit(
         bat_train[BAT_FEATURES].fillna(0), bat_train["target_pts"]
@@ -70,8 +85,9 @@ def train_and_evaluate(force: bool = False) -> OptimizerMetrics:
     pit_pred = pit_model.predict(pit_oot[PIT_FEATURES].fillna(0))
 
     metrics = OptimizerMetrics(
-        train_seasons=CONFIG.train_seasons,
-        oot_season=CONFIG.oot_season,
+        train_range=(training_pairs[0][0], training_pairs[-1][1]),
+        train_pairs=len(training_pairs),
+        oot_pair=oot_pair,
         mae_bat_oot=float(mean_absolute_error(bat_oot["target_pts"], bat_pred)),
         mae_pit_oot=float(mean_absolute_error(pit_oot["target_pts"], pit_pred)),
         r2_bat_oot=float(r2_score(bat_oot["target_pts"], bat_pred)),

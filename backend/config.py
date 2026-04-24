@@ -24,18 +24,24 @@ class Config:
     custom_model: str = os.getenv("CUSTOM_LLM_MODEL", "llama-3.1-8b-instruct")
 
     espn_league_id: str = os.getenv("ESPN_LEAGUE_ID", "")
-    espn_season: int = int(os.getenv("ESPN_SEASON", "2025"))
+    espn_season: int = int(os.getenv("ESPN_SEASON", "2026"))
     espn_swid: str = os.getenv("ESPN_SWID", "")
     espn_s2: str = os.getenv("ESPN_S2", "")
 
     data_cache_dir: Path = Path(os.getenv("DATA_CACHE_DIR", "./data_cache"))
 
-    # Scope: only consider data from these seasons (3-year window).
-    allowed_seasons: tuple = (2023, 2024, 2025)
-    train_seasons: tuple = (2023, 2024)
-    oot_season: int = 2025
+    # Historical scope for the project.
+    data_start_season: int = int(os.getenv("DATA_START_SEASON", "2000"))
+    oot_season: int = int(os.getenv("TARGET_SEASON", "2026"))
+    recent_history_window: int = int(os.getenv("RECENT_HISTORY_WINDOW", "3"))
+
+    allowed_seasons: tuple = ()
+    recent_history_seasons: tuple = ()
 
     def __post_init__(self):
+        self.allowed_seasons = tuple(range(self.data_start_season, self.oot_season + 1))
+        recent_start = max(self.data_start_season, self.oot_season - self.recent_history_window + 1)
+        self.recent_history_seasons = tuple(range(recent_start, self.oot_season + 1))
         self.data_cache_dir.mkdir(parents=True, exist_ok=True)
 
 

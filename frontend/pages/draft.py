@@ -5,10 +5,48 @@ import pandas as pd
 import streamlit as st
 
 from backend.agents.data_retrieval import DataRetrieval
+from backend.data import espn_client
 from backend.draft import simulator as sim
 from backend.workflow import AgentPipeline
 from frontend.components import agent_trace, recommendation_card
 from frontend.theme import PALETTE, page_header
+
+
+FALLBACK_TEAM_NAMES = [
+    "The Werbley Squad",
+    "Bleacher Creatures",
+    "Dingers & Things",
+    "Bullpen Brigade",
+    "Grand Slam Gang",
+    "Curveball Kings",
+    "Infield Flies",
+    "Walk-Off Wonders",
+    "Box Score Bandits",
+    "Closer Crew",
+    "Rally Cap Republic",
+    "Fastball Fury",
+]
+
+
+@st.cache_data(show_spinner=False)
+def _draft_setup_defaults():
+    league = espn_client.load_league()
+    team_names = [team.name for team in league.teams if team.name]
+    if not team_names:
+        team_names = FALLBACK_TEAM_NAMES[:4]
+
+    human_index = 0
+    for idx, team in enumerate(league.teams):
+        owner = (team.owner or "").strip().lower()
+        if owner in {"you", "me", "my team"}:
+            human_index = idx
+            break
+
+    return {
+        "source": league.source,
+        "team_names": team_names[:12],
+        "human_index": min(human_index, max(len(team_names[:12]) - 1, 0)),
+    }
 
 
 def _ensure_draft_state(team_names, human_index, rounds):
@@ -25,21 +63,24 @@ def _ensure_draft_state(team_names, human_index, rounds):
 
 def render():
     page_header("Draft Room", "Snake draft simulator powered by the 4-agent pipeline.")
+    defaults = _draft_setup_defaults()
 
     with st.sidebar.expander("Draft setup", expanded="draft_state" not in st.session_state):
-        n_teams = st.number_input("Teams", 2, 12, 4, step=1)
+        default_names = defaults["team_names"] or FALLBACK_TEAM_NAMES[:4]
+        n_teams = st.number_input("Teams", 2, 12, len(default_names), step=1)
         rounds = st.number_input("Rounds", 5, 25, 14, step=1)
         team_names = []
-        default_names = ["The Werbley Squad", "Bleacher Creatures",
-                         "Dingers & Things", "Bullpen Brigade",
-                         "Grand Slam Gang", "Curveball Kings",
-                         "Infield Flies", "Walk-Off Wonders",
-                         "Box Score Bandits", "Closer Crew",
-                         "Rally Cap Republic", "Fastball Fury"]
+        if defaults["source"] == "espn":
+            st.caption("Loaded team names from the ESPN league configured in `.env`.")
+        else:
+            st.caption("Using demo team names because ESPN league data is unavailable.")
         for i in range(int(n_teams)):
+            suggested_name = (default_names[i] if i < len(default_names)
+                              else FALLBACK_TEAM_NAMES[i])
             team_names.append(st.text_input(f"Team {i+1} name",
-                                            value=default_names[i], key=f"team_{i}"))
+                                            value=suggested_name, key=f"team_{i}"))
         human_index = st.selectbox("You are…", range(len(team_names)),
+                                   index=min(defaults["human_index"], len(team_names) - 1),
                                    format_func=lambda i: team_names[i])
         if st.button("Start / restart draft"):
             for k in ("draft_state", "draft_bundle", "standings_table"):

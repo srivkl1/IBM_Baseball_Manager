@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Optional
+import warnings
 
 from backend.config import CONFIG
 
@@ -22,10 +23,24 @@ class LLM(ABC):
 def get_llm() -> LLM:
     provider = CONFIG.llm_provider
     if provider == "watsonx":
-        from .watsonx_provider import WatsonxLLM
-        return WatsonxLLM()
+        try:
+            from .watsonx_provider import WatsonxLLM
+            return WatsonxLLM()
+        except Exception as exc:
+            warnings.warn(
+                f"Falling back to mock LLM because watsonx is unavailable: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     if provider == "custom":
-        from .custom_provider import CustomLLM
-        return CustomLLM()
+        try:
+            from .custom_provider import CustomLLM
+            return CustomLLM()
+        except Exception as exc:
+            warnings.warn(
+                f"Falling back to mock LLM because custom provider is unavailable: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     from .mock_provider import MockLLM
     return MockLLM()

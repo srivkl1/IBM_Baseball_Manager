@@ -1,8 +1,8 @@
 """Season-long scoring & standings, with an 'as-of date' for historical replay.
 
-We approximate in-season points by linearly accruing each player's 2025 final
-fantasy points across the 2025 MLB regular season (Mar 27 – Sep 28). This lets
-the UI slide a date and show evolving standings without needing per-game logs.
+We approximate in-season points by linearly accruing each player's target-season
+final fantasy points across a simplified regular-season window. This lets the UI
+slide a date and show evolving standings without needing per-game logs.
 """
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from backend.data import pybaseball_client as pyb
 from backend.draft.player_pool import _hitter_points, _pitcher_points
 
 
-SEASON_START = date(2025, 3, 27)
-SEASON_END = date(2025, 9, 28)
+SEASON_START = date(CONFIG.oot_season, 3, 27)
+SEASON_END = date(CONFIG.oot_season, 9, 28)
 
 
 def _season_fraction(as_of: date) -> float:

@@ -56,7 +56,7 @@ class Analysis:
             ]
             return Recommendation(
                 intent="draft_pick",
-                headline="Top overall prospects by 3-year composite + ML projection",
+                headline="Top overall players by recent-form composite + historical ML projection",
                 candidates=cands, rationale_bullets=bullets,
                 metrics={"pool_size": int(len(pool))},
             )

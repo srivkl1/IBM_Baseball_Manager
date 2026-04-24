@@ -3,20 +3,51 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # Prefer Python 3.13/3.12 if available (pybaseball still pins pandas<2.2
-# which has no wheels for Python 3.14). Fall back to whatever `python3` is.
+# which has no wheels for Python 3.14). On Windows Git Bash, Chocolatey shims
+# can exist even when the underlying Python is missing, so we verify candidates
+# by executing `--version` and fall back to the Windows `py` launcher.
 pick_python() {
-  for cand in python3.13 python3.12 python3.11 python3.10 python3; do
-    if command -v "$cand" >/dev/null 2>&1; then echo "$cand"; return; fi
+  if command -v py >/dev/null 2>&1; then
+    for cand in "-3.13" "-3.12" "-3.11" "-3.10" ""; do
+      if py $cand --version >/dev/null 2>&1; then
+        echo "py $cand"
+        return
+      fi
+    done
+  fi
+
+  for cand in python3.13 python3.12 python3.11 python3.10 python3 python; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" --version >/dev/null 2>&1; then
+      echo "$cand"
+      return
+    fi
   done
-  echo "python3"
+
+  echo ""
 }
 PY="$(pick_python)"
-echo "Using interpreter: $($PY --version) ($PY)"
+
+if [ -z "$PY" ]; then
+  echo "No working Python interpreter found."
+  echo "Install Python 3.12 or 3.11, then rerun this script."
+  exit 1
+fi
+
+read -r -a PY_CMD <<< "$PY"
+echo "Using interpreter: $("${PY_CMD[@]}" --version) ($PY)"
 
 if [ ! -d .venv ]; then
-  "$PY" -m venv .venv
+  "${PY_CMD[@]}" -m venv .venv
 fi
-source .venv/bin/activate
+
+if [ -f .venv/bin/activate ]; then
+  source .venv/bin/activate
+elif [ -f .venv/Scripts/activate ]; then
+  source .venv/Scripts/activate
+else
+  echo "Could not find a virtualenv activation script in .venv."
+  exit 1
+fi
 
 python -m pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
