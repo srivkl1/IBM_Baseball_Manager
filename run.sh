@@ -16,7 +16,15 @@ echo "Using interpreter: $($PY --version) ($PY)"
 if [ ! -d .venv ]; then
   "$PY" -m venv .venv
 fi
-source .venv/bin/activate
+
+if [ -f .venv/bin/activate ]; then
+  source .venv/bin/activate
+elif [ -f .venv/Scripts/activate ]; then
+  source .venv/Scripts/activate
+else
+  echo "[error] Could not find a virtualenv activation script in .venv."
+  exit 1
+fi
 
 python -m pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
