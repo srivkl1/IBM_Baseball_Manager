@@ -48,18 +48,6 @@ else
   echo "Could not find a virtualenv activation script in .venv."
   exit 1
 fi
-<<<<<<< HEAD
-=======
-
-if [ -f .venv/bin/activate ]; then
-  source .venv/bin/activate
-elif [ -f .venv/Scripts/activate ]; then
-  source .venv/Scripts/activate
-else
-  echo "[error] Could not find a virtualenv activation script in .venv."
-  exit 1
-fi
->>>>>>> 88c94826afd8a8ad2ebed89a449ebe7d21593e76
 
 python -m pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt

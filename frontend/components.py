@@ -5,6 +5,8 @@ from typing import Optional
 
 import streamlit as st
 
+from backend.config import CONFIG
+from backend.llm import get_llm
 from backend.workflow import AgentResponse
 from .theme import PALETTE
 
@@ -58,3 +60,57 @@ def provider_pill():
         f"LLM: {provider}</div>",
         unsafe_allow_html=True,
     )
+
+
+def _configured_model() -> str:
+    if CONFIG.llm_provider == "watsonx":
+        return CONFIG.watsonx_model_id
+    if CONFIG.llm_provider == "custom":
+        return CONFIG.custom_model
+    return "mock"
+
+
+def llm_status_panel():
+    with st.expander("LLM status", expanded=False):
+        st.caption(f"Configured provider: `{CONFIG.llm_provider}`")
+        st.caption(f"Configured model: `{_configured_model()}`")
+
+        llm = None
+        init_error = ""
+        actual_provider = CONFIG.llm_provider
+        try:
+            llm = get_llm()
+            actual_provider = getattr(llm, "name", actual_provider)
+        except Exception as exc:
+            init_error = str(exc)
+
+        if init_error:
+            st.error(f"Initialization failed: {init_error}")
+        elif actual_provider != CONFIG.llm_provider:
+            st.warning(f"Initialized `{actual_provider}` instead of `{CONFIG.llm_provider}`.")
+        else:
+            st.success(f"`{actual_provider}` initialized successfully.")
+
+        if st.button("Test LLM", key="llm_test_button", use_container_width=True):
+            try:
+                llm = llm or get_llm()
+                result = llm.generate(
+                    prompt="Reply with exactly: LLM OK",
+                    system="You are a concise health check.",
+                    max_tokens=16,
+                    temperature=0,
+                )
+                st.session_state["llm_test_result"] = {
+                    "provider": getattr(llm, "name", CONFIG.llm_provider),
+                    "result": result,
+                }
+            except Exception as exc:
+                st.session_state["llm_test_result"] = {
+                    "provider": CONFIG.llm_provider,
+                    "result": f"[test failed: {exc}]",
+                }
+
+        test_result = st.session_state.get("llm_test_result")
+        if test_result:
+            st.caption(f"Last test via `{test_result['provider']}`:")
+            st.code(str(test_result["result"]))

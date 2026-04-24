@@ -11,46 +11,39 @@ from __future__ import annotations
 import pandas as pd
 
 from backend.config import CONFIG
+from backend.data import mlb_stats
 from backend.data import pybaseball_client as pyb
+from backend.scoring import ScoringProfile, default_profile, hitter_points, pitcher_points
 
 
-# Fantasy-points weights for a standard roto-like league. Simple & readable.
-BAT_POINTS = {"R": 1.0, "HR": 4.0, "RBI": 1.0, "SB": 2.0}
-PIT_POINTS = {"W": 5.0, "SV": 5.0, "K": 1.0}
+def _hitter_points(row: pd.Series, profile: ScoringProfile | None = None) -> float:
+    return hitter_points(row, profile or default_profile())
 
 
-def _hitter_points(row: pd.Series) -> float:
-    pts = sum(row.get(k, 0) * w for k, w in BAT_POINTS.items())
-    # Reward batting average contribution (scaled to ~ a few points).
-    pts += (row.get("AVG", 0) - 0.250) * 300
-    return float(pts)
+def _pitcher_points(row: pd.Series, profile: ScoringProfile | None = None) -> float:
+    return pitcher_points(row, profile or default_profile())
 
 
-def _pitcher_points(row: pd.Series) -> float:
-    pts = sum(row.get(k, 0) * w for k, w in PIT_POINTS.items())
-    # Reward low ERA / WHIP.
-    pts += max(0.0, (4.20 - row.get("ERA", 4.20))) * 8
-    pts += max(0.0, (1.30 - row.get("WHIP", 1.30))) * 20
-    return float(pts)
-
-
-def build_pool() -> pd.DataFrame:
+def build_pool(profile: ScoringProfile | None = None) -> pd.DataFrame:
+    profile = profile or default_profile()
     frames = []
     for season in CONFIG.recent_history_seasons:
         b = pyb.batting_stats(season).copy()
         b["role"] = "BAT"
-        b["fantasy_pts"] = b.apply(_hitter_points, axis=1)
+        b["fantasy_pts"] = b.apply(lambda row: _hitter_points(row, profile), axis=1)
         p = pyb.pitching_stats(season).copy()
         p["role"] = "PIT"
-        p["fantasy_pts"] = p.apply(_pitcher_points, axis=1)
-        frames.append(b[["Name", "Team", "Season", "role", "WAR", "fantasy_pts"]])
-        frames.append(p[["Name", "Team", "Season", "role", "WAR", "fantasy_pts"]])
+        p["fantasy_pts"] = p.apply(lambda row: _pitcher_points(row, profile), axis=1)
+        b["GS"] = 0
+        frames.append(b[["Name", "Team", "Season", "role", "WAR", "fantasy_pts", "G", "GS"]])
+        frames.append(p[["Name", "Team", "Season", "role", "WAR", "fantasy_pts", "G", "GS"]])
     long = pd.concat(frames, ignore_index=True)
 
     most_recent = long["Season"].max()
     recent = long[long["Season"] == most_recent][["Name", "role", "Team",
-                                                  "fantasy_pts", "WAR"]].rename(
-        columns={"fantasy_pts": "recent_pts", "WAR": "recent_war"}
+                                                  "fantasy_pts", "WAR", "G", "GS"]].rename(
+        columns={"fantasy_pts": "recent_pts", "WAR": "recent_war",
+                 "G": "recent_games", "GS": "recent_starts"}
     )
 
     agg = (long.groupby(["Name", "role"], as_index=False)
@@ -59,11 +52,22 @@ def build_pool() -> pd.DataFrame:
     pool = agg.merge(recent, on=["Name", "role"], how="left")
     pool["recent_pts"] = pool["recent_pts"].fillna(pool["avg_pts"])
     pool["recent_war"] = pool["recent_war"].fillna(pool["avg_war"])
+    pool["recent_games"] = pool["recent_games"].fillna(0)
+    pool["recent_starts"] = pool["recent_starts"].fillna(0)
 
     # Composite draft score: weight recent form slightly higher than the recent-window average.
     pool["draft_score"] = (0.55 * pool["recent_pts"]
                            + 0.30 * pool["avg_pts"]
                            + 1.5 * (pool["recent_war"] + pool["avg_war"]))
+    pool["fantasy_position"] = pool.apply(
+        lambda row: mlb_stats.position_for_player(
+            row["Name"],
+            role=row["role"],
+            games_started=float(row.get("recent_starts", 0) or 0),
+            games_played=float(row.get("recent_games", 0) or 0),
+        ),
+        axis=1,
+    )
     pool = pool.sort_values("draft_score", ascending=False).reset_index(drop=True)
     pool["rank"] = pool.index + 1
     pool["tier"] = pd.cut(pool["rank"],

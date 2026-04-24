@@ -1,10 +1,9 @@
-"""Agent 1 — Orchestrator.
+"""Agent 1 - Orchestrator.
 
 Responsibilities:
-  1. Interpret the user request (intent classification, ambiguity check).
+  1. Interpret the user request.
   2. Ask a clarifying question if intent is unclear.
-  3. Assemble a structured data-request for Agent 2.
-  4. Route the downstream agent outputs back to the user.
+  3. Assemble a structured data request for downstream agents.
 """
 from __future__ import annotations
 
@@ -15,16 +14,17 @@ from backend.llm import LLM, get_llm
 
 INTENTS = {
     "draft_pick": "Recommend the next pick in an active fantasy draft.",
+    "roster_lookup": "Show the current roster for the user's fantasy team.",
     "roster_move": "Recommend an add/drop, trade, or waiver move.",
     "player_trend": "Explain recent performance trend for a player.",
-    "standings_check": "Report current standings / season progress.",
+    "standings_check": "Report current standings or season progress.",
 }
 
 
 @dataclass
 class AgentRequest:
     user_text: str
-    skill_level: str = "beginner"  # "beginner" | "expert"
+    skill_level: str = "beginner"
     context: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -38,16 +38,24 @@ class OrchestratorPlan:
 
 def _rule_based_intent(text: str) -> tuple[str, float]:
     t = text.lower()
+    if any(k in t for k in (
+        "who is on my team", "who's on my team", "my roster", "show my team",
+        "show my roster", "who do i have", "my lineup", "who is on joseph",
+        "who's on joseph", "who is on joseph's", "who's on joseph's",
+    )):
+        return "roster_lookup", 0.95
     if any(k in t for k in ("draft", "pick", "round", "on the clock", "bpa")):
         return "draft_pick", 0.85
     if any(k in t for k in ("trade", "waiver", "add", "drop", "swap")):
         return "roster_move", 0.80
     if any(k in t for k in ("trend", "hot", "cold", "slump", "streak")):
         return "player_trend", 0.75
-    if any(k in t for k in ("standing", "rank", "place", "leader",
-                             "where do i stand", "how am i doing", "my team doing")):
+    if any(k in t for k in (
+        "standing", "rank", "place", "leader", "where do i stand",
+        "how am i doing", "my team doing",
+    )):
         return "standings_check", 0.80
-    return "draft_pick", 0.40  # default assumption for this app
+    return "draft_pick", 0.40
 
 
 class Orchestrator:
@@ -57,13 +65,16 @@ class Orchestrator:
     def plan(self, req: AgentRequest) -> OrchestratorPlan:
         intent, conf = _rule_based_intent(req.user_text)
 
-        # Let the LLM sanity-check the intent when confidence is low.
         if conf < 0.6:
             sys = ("You are an intent classifier for a fantasy-baseball assistant. "
                    f"Valid intents: {list(INTENTS)}. "
                    "Reply ONLY as: intent=<one of them>.")
-            reply = self.llm.generate(f"Classify intent: {req.user_text}",
-                                      system=sys, max_tokens=32, temperature=0)
+            reply = self.llm.generate(
+                f"Classify intent: {req.user_text}",
+                system=sys,
+                max_tokens=32,
+                temperature=0,
+            )
             for key in INTENTS:
                 if key in reply:
                     intent, conf = key, 0.65
@@ -71,9 +82,11 @@ class Orchestrator:
 
         clarification = None
         if conf < 0.5:
-            clarification = ("I want to make sure I get this right — are you asking "
-                             "about a draft pick, a trade/waiver move, a player's "
-                             "recent trend, or your current standings?")
+            clarification = (
+                "I want to make sure I get this right - are you asking about a draft "
+                "pick, your roster, a trade or waiver move, a player's recent trend, "
+                "or your current standings?"
+            )
 
         data_request = {
             "intent": intent,
@@ -82,6 +95,9 @@ class Orchestrator:
             "needs_standings": intent == "standings_check",
             "user_context": req.context,
         }
-        return OrchestratorPlan(intent=intent, confidence=conf,
-                                clarification=clarification,
-                                data_request=data_request)
+        return OrchestratorPlan(
+            intent=intent,
+            confidence=conf,
+            clarification=clarification,
+            data_request=data_request,
+        )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from backend.draft import league_state
 from backend.workflow import AgentPipeline
 from frontend.components import agent_trace, recommendation_card
 from frontend.theme import page_header
@@ -14,6 +15,12 @@ def render():
 
     if "pipeline" not in st.session_state:
         st.session_state["pipeline"] = AgentPipeline()
+
+    if "draft_state" not in st.session_state:
+        imported_state, bundle, _ = league_state.load_existing_league_state()
+        if imported_state is not None:
+            st.session_state["draft_state"] = imported_state
+            st.session_state["draft_bundle"] = bundle
 
     skill = st.radio("Skill level", ["beginner", "expert"], horizontal=True)
 

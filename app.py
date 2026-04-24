@@ -5,7 +5,7 @@ import os
 
 import streamlit as st
 
-from frontend.components import provider_pill
+from frontend.components import llm_status_panel, provider_pill
 from frontend.pages import draft as draft_page
 from frontend.pages import home as home_page
 from frontend.pages import model_lab as model_page
@@ -27,6 +27,7 @@ with st.sidebar:
     st.divider()
     st.caption("Set `LLM_PROVIDER` in `.env` to `watsonx`, `custom`, or `mock`.")
     st.caption(f"Current: `{os.getenv('LLM_PROVIDER', 'mock')}`")
+    llm_status_panel()
 
 if page == "Home":
     home_page.render()

@@ -42,6 +42,16 @@ class Explanation:
         self.llm = llm or get_llm()
 
     def explain(self, rec: Recommendation, skill_level: str = "beginner") -> str:
+        if rec.intent == "roster_lookup":
+            if not rec.candidates:
+                return rec.headline
+            names = ", ".join(c.get("player", c.get("name", "")) for c in rec.candidates[:12])
+            extra = len(rec.candidates) - 12
+            if extra > 0:
+                names += f", and {extra} more."
+            else:
+                names += "."
+            return f"Here is your current roster: {names}"
         sys = SYSTEM_TEMPLATES.get(skill_level, SYSTEM_TEMPLATES["beginner"])
         prompt = _prompt_from_recommendation(rec)
         text = self.llm.generate(prompt, system=sys, max_tokens=300, temperature=0.3)

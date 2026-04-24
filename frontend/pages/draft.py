@@ -6,6 +6,7 @@ import streamlit as st
 
 from backend.agents.data_retrieval import DataRetrieval
 from backend.data import espn_client
+from backend.draft import league_state
 from backend.draft import simulator as sim
 from backend.workflow import AgentPipeline
 from frontend.components import agent_trace, recommendation_card
@@ -28,6 +29,26 @@ FALLBACK_TEAM_NAMES = [
 ]
 
 
+def _round_by_round_board(log: list[dict]) -> pd.DataFrame:
+    if not log:
+        return pd.DataFrame()
+    picks = pd.DataFrame(log)
+    if not {"round", "slot", "team", "player"}.issubset(picks.columns):
+        return pd.DataFrame()
+    picks = picks[picks["round"].fillna(0).astype(int) > 0].copy()
+    if picks.empty:
+        return pd.DataFrame()
+    picks["cell"] = picks.apply(lambda row: f"{row['player']} ({row['team']})", axis=1)
+    board = (
+        picks.pivot(index="round", columns="slot", values="cell")
+        .sort_index()
+        .sort_index(axis=1)
+    )
+    board.index.name = "Round"
+    board.columns = [f"Pick {int(col)}" for col in board.columns]
+    return board.reset_index()
+
+
 @st.cache_data(show_spinner=False)
 def _draft_setup_defaults():
     league = espn_client.load_league()
@@ -46,6 +67,7 @@ def _draft_setup_defaults():
         "source": league.source,
         "team_names": team_names[:12],
         "human_index": min(human_index, max(len(team_names[:12]) - 1, 0)),
+        "has_existing_rosters": league_state.has_existing_rosters(league),
     }
 
 
@@ -65,12 +87,21 @@ def render():
     page_header("Draft Room", "Snake draft simulator powered by the 4-agent pipeline.")
     defaults = _draft_setup_defaults()
 
+    if defaults["has_existing_rosters"] and "draft_state" not in st.session_state:
+        imported_state, bundle, _ = league_state.load_existing_league_state()
+        if imported_state is not None:
+            st.session_state["draft_state"] = imported_state
+            st.session_state["draft_bundle"] = bundle
+            st.session_state["pipeline"] = st.session_state.get("pipeline") or AgentPipeline()
+
     with st.sidebar.expander("Draft setup", expanded="draft_state" not in st.session_state):
         default_names = defaults["team_names"] or FALLBACK_TEAM_NAMES[:4]
         n_teams = st.number_input("Teams", 2, 12, len(default_names), step=1)
         rounds = st.number_input("Rounds", 5, 25, 14, step=1)
         team_names = []
-        if defaults["source"] == "espn":
+        if defaults["has_existing_rosters"]:
+            st.caption("Loaded your existing ESPN rosters. Use restart only if you want to simulate a fresh draft.")
+        elif defaults["source"] == "espn":
             st.caption("Loaded team names from the ESPN league configured in `.env`.")
         else:
             st.caption("Using demo team names because ESPN league data is unavailable.")
@@ -101,7 +132,9 @@ def render():
     left, right = st.columns([3, 2])
     with left:
         st.subheader("Board")
-        if state.is_complete:
+        if state.source == "espn-import":
+            st.success("This ESPN league is already drafted, so the app is using the live league rosters directly.")
+        elif state.is_complete:
             st.success("Draft complete — head to the **Season tracker** page.")
         else:
             round_num, slot = state.round_and_slot()
@@ -135,8 +168,8 @@ def render():
         st.markdown("#### Top 15 still on the board")
         avail = state.board[state.board["available"]].head(15)
         st.dataframe(
-            avail[["Name", "Team", "role", "proj_pts", "rank", "tier"]]
-            .rename(columns={"Name": "Player", "role": "Pos", "proj_pts": "Proj pts",
+            avail[["Name", "Team", "fantasy_position", "proj_pts", "rank", "tier"]]
+            .rename(columns={"Name": "Player", "fantasy_position": "Pos", "proj_pts": "Proj pts",
                              "rank": "3-yr rank", "tier": "Tier"}),
             hide_index=True, use_container_width=True,
         )
@@ -145,8 +178,11 @@ def render():
         st.subheader("Your roster")
         my_team = state.teams[state.human_index]
         if state.rosters[my_team]:
-            st.dataframe(pd.DataFrame(state.rosters[my_team]),
-                         hide_index=True, use_container_width=True)
+            roster_df = pd.DataFrame(state.rosters[my_team]).rename(
+                columns={"fantasy_position": "pos", "mlb_team": "team"}
+            )
+            preferred = [col for col in ("player", "pos", "team", "proj_pts") if col in roster_df.columns]
+            st.dataframe(roster_df[preferred], hide_index=True, use_container_width=True)
         else:
             st.caption("No picks yet.")
 
@@ -154,7 +190,11 @@ def render():
         for team, roster in state.rosters.items():
             with st.expander(f"{team} ({len(roster)})"):
                 if roster:
-                    st.dataframe(pd.DataFrame(roster), hide_index=True,
+                    roster_df = pd.DataFrame(roster).rename(
+                        columns={"fantasy_position": "pos", "mlb_team": "team"}
+                    )
+                    preferred = [col for col in ("player", "pos", "team", "proj_pts") if col in roster_df.columns]
+                    st.dataframe(roster_df[preferred], hide_index=True,
                                  use_container_width=True)
                 else:
                     st.caption("empty")
@@ -163,3 +203,7 @@ def render():
         if state.log:
             st.dataframe(pd.DataFrame(state.log).tail(20),
                          hide_index=True, use_container_width=True)
+            round_board = _round_by_round_board(state.log)
+            if not round_board.empty:
+                st.subheader("Round-by-round board")
+                st.dataframe(round_board, hide_index=True, use_container_width=True)

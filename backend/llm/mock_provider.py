@@ -31,6 +31,10 @@ class MockLLM(LLM):
 
         # Intent-classification prompts (orchestrator low-confidence fallback).
         if "intent classifier" in s or "classify intent" in p:
+            if any(k in p for k in ("who is on my team", "who's on my team", "my roster",
+                                    "show my team", "show my roster", "who do i have",
+                                    "my lineup")):
+                return "intent=roster_lookup"
             if any(k in p for k in ("draft", "pick", "round")):
                 return "intent=draft_pick"
             if any(k in p for k in ("trade", "waiver", "add", "drop")):

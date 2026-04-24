@@ -24,6 +24,8 @@ class DraftState:
     board: pd.DataFrame               # available players (mutated as picks occur)
     log: List[dict] = field(default_factory=list)   # every pick, in order
     rosters: dict = field(default_factory=dict)     # team_name -> list[dict]
+    draft_locked: bool = False
+    source: str = "simulation"
 
     @property
     def total_picks(self) -> int:
@@ -35,9 +37,11 @@ class DraftState:
 
     @property
     def is_complete(self) -> bool:
-        return len(self.log) >= self.total_picks
+        return self.draft_locked or len(self.log) >= self.total_picks
 
     def team_on_clock(self) -> str:
+        if self.draft_locked:
+            return "League already drafted"
         pick_idx = len(self.log)
         round_num = pick_idx // len(self.teams)
         slot = pick_idx % len(self.teams)
@@ -47,10 +51,14 @@ class DraftState:
         return self.teams[order[slot]]
 
     def round_and_slot(self) -> tuple[int, int]:
+        if self.draft_locked:
+            return 0, 0
         pick_idx = len(self.log)
         return (pick_idx // len(self.teams)) + 1, (pick_idx % len(self.teams)) + 1
 
     def human_on_clock(self) -> bool:
+        if self.draft_locked:
+            return False
         return self.team_on_clock() == self.teams[self.human_index]
 
 
@@ -61,6 +69,72 @@ def new_draft(board: pd.DataFrame, teams: List[str], human_index: int = 0,
     rosters = {t: [] for t in teams}
     return DraftState(teams=teams, human_index=human_index, rounds=rounds,
                       board=board, rosters=rosters)
+
+
+def from_existing_rosters(board: pd.DataFrame, teams: List[str], rosters: dict,
+                          human_index: int = 0, source: str = "espn-import"
+                          ) -> DraftState:
+    board = board.copy().reset_index(drop=True)
+    board["available"] = True
+    normalized_rosters = {team: [] for team in teams}
+    imported_log: List[dict] = []
+
+    for team in teams:
+        for player in rosters.get(team, []):
+            name = player.get("player", "")
+            role = player.get("role", "BAT")
+            mlb_team = player.get("mlb_team", "")
+            fantasy_position = player.get("fantasy_position", role)
+            proj_pts = float(player.get("proj_pts", 0.0))
+            espn_total_points = float(player.get("espn_total_points", 0.0))
+            espn_projected_total_points = float(player.get("espn_projected_total_points", 0.0))
+            mask = (board["Name"] == name) & board["available"]
+            if role:
+                role_mask = mask & (board["role"] == role)
+                if role_mask.any():
+                    mask = role_mask
+            if mask.any():
+                row = board.loc[mask].iloc[0]
+                role = row["role"]
+                mlb_team = row.get("Team", mlb_team)
+                fantasy_position = row.get("fantasy_position", fantasy_position)
+                proj_pts = float(row.get("proj_pts", row.get("draft_score", proj_pts)))
+                board.loc[[row.name], "available"] = False
+            normalized_player = {
+                "player": name,
+                "role": role,
+                "mlb_team": mlb_team,
+                "fantasy_position": fantasy_position,
+                "proj_pts": proj_pts,
+                "espn_total_points": espn_total_points,
+                "espn_projected_total_points": espn_projected_total_points,
+            }
+            normalized_rosters[team].append(normalized_player)
+            imported_log.append({
+                "pick_no": len(imported_log) + 1,
+                "round": 0,
+                "slot": 0,
+                "team": team,
+                "player": name,
+                "role": role,
+                "mlb_team": mlb_team,
+                "fantasy_position": fantasy_position,
+                "proj_pts": proj_pts,
+                "espn_total_points": espn_total_points,
+                "espn_projected_total_points": espn_projected_total_points,
+            })
+
+    rounds = max((len(roster) for roster in normalized_rosters.values()), default=1)
+    return DraftState(
+        teams=teams,
+        human_index=human_index,
+        rounds=rounds,
+        board=board,
+        log=imported_log,
+        rosters=normalized_rosters,
+        draft_locked=True,
+        source=source,
+    )
 
 
 def _team_needs(state: DraftState, team: str) -> dict:
@@ -74,12 +148,22 @@ def _score_candidate(state: DraftState, team: str, player_row: pd.Series) -> flo
     needs = _team_needs(state, team)
     role = player_row["role"]
     base = float(player_row.get("proj_pts", player_row.get("draft_score", 0)))
-    need_bonus = 15.0 if needs.get(role, 0) > 0 else -40.0
+    roster = state.rosters.get(team, [])
+    picks_made = len(roster)
+    role_count = sum(1 for r in roster if r["role"] == role)
+    same_team_count = sum(1 for r in roster if r.get("mlb_team") == player_row.get("Team"))
+
+    need_bonus = 18.0 if needs.get(role, 0) > 0 else -40.0
+    role_balance_bonus = max(0.0, needs.get(role, 0)) * 4.5
+    early_pitching_bonus = 0.0
+    if role == "PIT" and picks_made >= 2 and role_count == 0:
+        early_pitching_bonus = 18.0
+    stack_penalty = same_team_count * 4.0
     # Slight randomness so CPUs aren't perfectly deterministic.
     jitter = np.random.default_rng(
         hash((team, player_row["Name"])) % (2**32)
     ).normal(0, 3)
-    return base + need_bonus + jitter
+    return base + need_bonus + role_balance_bonus + early_pitching_bonus - stack_penalty + jitter
 
 
 def recommend_pick(state: DraftState, team: Optional[str] = None,
@@ -108,10 +192,25 @@ def apply_pick(state: DraftState, player_name: str) -> dict:
         "team": team,
         "player": player_name,
         "role": row["role"],
+        "mlb_team": row.get("Team", ""),
+        "fantasy_position": row.get("fantasy_position", row["role"]),
         "proj_pts": float(row.get("proj_pts", row.get("draft_score", 0))),
+        "espn_total_points": float(row.get("espn_total_points", 0.0)),
+        "espn_projected_total_points": float(row.get("espn_projected_total_points", 0.0)),
     }
     state.board.loc[mask, "available"] = False
-    state.rosters[team].append({k: pick_record[k] for k in ("player", "role", "proj_pts")})
+    state.rosters[team].append({
+        k: pick_record[k]
+        for k in (
+            "player",
+            "role",
+            "mlb_team",
+            "fantasy_position",
+            "proj_pts",
+            "espn_total_points",
+            "espn_projected_total_points",
+        )
+    })
     state.log.append(pick_record)
     return pick_record
 
