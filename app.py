@@ -1,4 +1,4 @@
-"""Werbley's Squad — Streamlit entry point."""
+"""Werbley's Squad - Streamlit entry point."""
 from __future__ import annotations
 
 import os
@@ -12,23 +12,30 @@ from frontend.pages import model_lab as model_page
 from frontend.pages import season_tracker as season_page
 from frontend.pages import team_page
 from frontend.pages import trade_analyzer as trade_page
-from frontend.theme import PALETTE, apply_theme
+from frontend.theme import apply_theme
 
-st.set_page_config(page_title="Werbley's Squad — Fantasy Baseball Optimizer",
-                   page_icon="⚾", layout="wide")
+st.set_page_config(
+    page_title="Werbley's Squad - Fantasy Baseball Optimizer",
+    page_icon="WB",
+    layout="wide",
+)
 apply_theme()
 
 with st.sidebar:
-    st.markdown(f"### ⚾ Werbley's Squad")
-    st.caption("IBM Experiential AI Lab • 4-agent fantasy baseball optimizer")
+    st.markdown("### Werbley's Squad")
+    st.caption("IBM Experiential AI Lab | 4-agent fantasy baseball optimizer")
     provider_pill()
     st.divider()
     page = st.radio(
         "Navigate",
         ["Home", "Draft Room", "Season Tracker", "Team Advisor", "Trade Analyzer", "Model Lab"],
     )
-    skill = st.radio("Skill level", ["beginner", "expert"], horizontal=True,
-                     key="skill_level")
+    skill = st.radio(
+        "Skill level",
+        ["beginner", "expert"],
+        horizontal=True,
+        key="skill_level",
+    )
     st.divider()
     st.caption("Set `LLM_PROVIDER` in `.env` to `watsonx`, `custom`, or `mock`.")
     st.caption(f"Current: `{os.getenv('LLM_PROVIDER', 'mock')}`")

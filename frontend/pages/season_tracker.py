@@ -13,7 +13,7 @@ from backend.draft import league_state
 from backend.draft.scorer import (SEASON_END, SEASON_START, standings,
                                   player_weekly_trajectory)
 from backend.season_tracker import build_espn_season_tracker
-from frontend.components import agent_trace, ensure_pipeline, recommendation_card
+from frontend.components import agent_trace, ensure_pipeline, loading_state, recommendation_card
 from frontend.theme import PALETTE, page_header
 
 
@@ -35,10 +35,11 @@ def _breakdown_lines(scoring_profile):
 def _stat_card(label: str, value: str):
     st.markdown(
         f"""
-        <div style="background:{PALETTE['baseline_white']};border:1px solid {PALETTE['dirt_tan']};
-             padding:16px 18px;border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,0.08);min-height:112px;">
-          <div style="font-size:1rem;color:{PALETTE['away_navy']};opacity:0.9;">{label}</div>
-          <div style="font-size:2.2rem;font-weight:700;color:{PALETTE['away_navy']};margin-top:8px;">{value}</div>
+        <div style="background:{PALETTE['card']};border:1px solid {PALETTE['line']};
+             border-top:4px solid {PALETTE['mlb_red']};padding:16px 18px;border-radius:8px;
+             box-shadow:0 8px 22px rgba(10,34,64,.06);min-height:112px;">
+          <div style="font-size:1rem;color:{PALETTE['muted']};">{label}</div>
+          <div style="font-size:2.2rem;font-weight:800;color:{PALETTE['mlb_navy']};margin-top:8px;">{value}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -114,17 +115,21 @@ def render():
     my_team = _my_team_name(state, league)
     using_exact_espn = league.source == "espn"
 
-    if using_exact_espn:
-        table, traj, outlook, _, _ = build_espn_season_tracker(as_of)
-        if as_of < date.today():
-            st.caption("Historical dates use completed ESPN matchup periods. Today's view reflects the live ESPN snapshot.")
-    else:
-        if state is None or not state.rosters.get(state.teams[state.human_index]):
-            st.warning("Complete a draft on the Draft Room page first.")
-            return
-        table = standings(state.rosters, as_of, profile=scoring_profile)
-        traj = player_weekly_trajectory(state.rosters[my_team], as_of, profile=scoring_profile)
-        outlook = pd.DataFrame()
+    with loading_state(
+        "Loading season tracker",
+        "Building standings, matchup trajectory, and season outlook.",
+    ):
+        if using_exact_espn:
+            table, traj, outlook, _, _ = build_espn_season_tracker(as_of)
+            if as_of < date.today():
+                st.caption("Historical dates use completed ESPN matchup periods. Today's view reflects the live ESPN snapshot.")
+        else:
+            if state is None or not state.rosters.get(state.teams[state.human_index]):
+                st.warning("Complete a draft on the Draft Room page first.")
+                return
+            table = standings(state.rosters, as_of, profile=scoring_profile)
+            traj = player_weekly_trajectory(state.rosters[my_team], as_of, profile=scoring_profile)
+            outlook = pd.DataFrame()
 
     st.session_state["standings_table"] = table
     st.subheader("Standings")
@@ -215,10 +220,14 @@ def render():
         st.caption("Red current-matchup segments bridge completed actual scoring to ESPN's live matchup projection; dashed projected segments extend each team using its average matchup score across the remaining schedule.")
 
     if st.button("Ask the assistant how I'm doing"):
-        resp = ensure_pipeline().run(
-            user_text=f"What are my current standings as of {as_of}?",
-            skill_level=st.session_state.get("skill_level", "beginner"),
-            standings_table=table,
-        )
+        with loading_state(
+            "Asking Werbley about your season",
+            "Summarizing standings, projections, and current matchup context.",
+        ):
+            resp = ensure_pipeline().run(
+                user_text=f"What are my current standings as of {as_of}?",
+                skill_level=st.session_state.get("skill_level", "beginner"),
+                standings_table=table,
+            )
         recommendation_card(resp)
         agent_trace(resp)

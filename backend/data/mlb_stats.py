@@ -136,6 +136,65 @@ def teams_played(name: str, season: int) -> list[str]:
     return teams
 
 
+def player_season_summary(name: str, season: int) -> dict:
+    identity = resolve_player_identity(name)
+    player_id = identity.get("id")
+    if not player_id:
+        return {}
+
+    def build_summary(stat_season: int) -> dict:
+        summary = {"name": identity.get("fullName", name), "mlbam_id": player_id, "season": stat_season}
+        for group in ("hitting", "pitching"):
+            try:
+                data = _request_json(
+                    f"{_BASE}/people/{player_id}/stats",
+                    params={"stats": "season", "group": group, "season": stat_season},
+                )
+            except Exception:
+                continue
+            stats = data.get("stats", [])
+            if not stats or not stats[0].get("splits"):
+                continue
+            split = stats[0]["splits"][0]
+            team = (split.get("team", {}) or {}).get("name")
+            stat = split.get("stat", {}) or {}
+            if group == "hitting":
+                summary["hitting"] = {
+                    "team": team,
+                    "games": stat.get("gamesPlayed"),
+                    "avg": stat.get("avg"),
+                    "ops": stat.get("ops"),
+                    "home_runs": stat.get("homeRuns"),
+                    "rbi": stat.get("rbi"),
+                    "runs": stat.get("runs"),
+                    "stolen_bases": stat.get("stolenBases"),
+                    "strikeouts": stat.get("strikeOuts"),
+                    "walks": stat.get("baseOnBalls"),
+                }
+            else:
+                summary["pitching"] = {
+                    "team": team,
+                    "games": stat.get("gamesPlayed"),
+                    "games_started": stat.get("gamesStarted"),
+                    "innings": stat.get("inningsPitched"),
+                    "era": stat.get("era"),
+                    "whip": stat.get("whip"),
+                    "wins": stat.get("wins"),
+                    "losses": stat.get("losses"),
+                    "saves": stat.get("saves"),
+                    "strikeouts": stat.get("strikeOuts"),
+                    "walks": stat.get("baseOnBalls"),
+                    "home_runs": stat.get("homeRuns"),
+                }
+        return summary
+
+    for stat_season in (season, season - 1, season - 2):
+        summary = build_summary(stat_season)
+        if summary.get("hitting") or summary.get("pitching"):
+            return summary
+    return {"name": identity.get("fullName", name), "mlbam_id": player_id, "season": season}
+
+
 @cached("mlb_player_game_logs")
 def player_game_logs(name: str, season: int, group: str) -> pd.DataFrame:
     identity = resolve_player_identity(name)

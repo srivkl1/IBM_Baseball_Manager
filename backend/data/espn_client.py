@@ -5,6 +5,8 @@ from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import List
 
+import requests
+
 from backend.config import CONFIG
 from backend.scoring import ScoringProfile, default_profile, profile_from_espn_settings
 
@@ -236,6 +238,44 @@ def load_free_agent_players(size: int = 100) -> List[FantasyPlayer]:
         return [_to_fantasy_player(player) for player in lg.free_agents(size=size)]
     except Exception:
         return []
+
+
+@lru_cache(maxsize=1)
+def public_mlb_injury_map() -> dict[str, dict]:
+    """Return current public ESPN MLB injury statuses keyed by player name."""
+    try:
+        response = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries",
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return {}
+
+    injuries: dict[str, dict] = {}
+    for team_block in data.get("injuries", []):
+        team_name = team_block.get("displayName", "")
+        for item in team_block.get("injuries", []):
+            athlete = item.get("athlete", {}) or {}
+            name = athlete.get("displayName") or item.get("displayName") or item.get("name")
+            if not name:
+                continue
+            status = item.get("status") or (item.get("status", {}) or {}).get("name", "")
+            if isinstance(status, dict):
+                status = status.get("name") or status.get("type") or status.get("abbreviation") or ""
+            details = item.get("details", {}) or {}
+            fantasy_status = details.get("fantasyStatus", {}) if isinstance(details, dict) else {}
+            injuries[name.strip().casefold()] = {
+                "status": str(status or ""),
+                "fantasy_status": str(fantasy_status.get("description") or fantasy_status.get("abbreviation") or ""),
+                "type": str((item.get("type", {}) or {}).get("description") or ""),
+                "detail": str(details.get("detail") or details.get("type") or ""),
+                "return_date": str(details.get("returnDate") or ""),
+                "team": team_name,
+                "summary": item.get("shortComment") or item.get("longComment") or "",
+            }
+    return injuries
 
 
 def player_news(name: str, limit: int = 3) -> List[dict]:

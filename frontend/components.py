@@ -1,7 +1,8 @@
 """Shared Streamlit UI components."""
 from __future__ import annotations
 
-from typing import Optional
+from contextlib import contextmanager
+from html import escape
 
 import streamlit as st
 
@@ -11,8 +12,29 @@ from backend.workflow import AgentResponse
 from .theme import PALETTE
 
 
+@contextmanager
+def loading_state(title: str, detail: str = ""):
+    placeholder = st.empty()
+    placeholder.markdown(
+        f"""
+        <div class="wb-loading" role="status" aria-live="polite">
+          <div class="wb-loader"></div>
+          <div>
+            <div class="wb-loading-title">{escape(title)}</div>
+            <div class="wb-loading-detail">{escape(detail)}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    try:
+        yield
+    finally:
+        placeholder.empty()
+
+
 def agent_trace(resp: AgentResponse):
-    with st.expander("🧠 Agent trace (orchestrator → retrieval → analysis → explanation)"):
+    with st.expander("Agent trace: orchestrator -> retrieval -> analysis -> explanation"):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Orchestrator plan**")
@@ -32,8 +54,10 @@ def agent_trace(resp: AgentResponse):
             })
             st.markdown("**Self-evaluation**")
             st.json(resp.self_eval)
-        st.caption(f"LLM provider: `{resp.trace.get('provider')}` • "
-                   f"Data source: `{resp.trace.get('data_source')}`")
+        st.caption(
+            f"LLM provider: `{resp.trace.get('provider')}` | "
+            f"Data source: `{resp.trace.get('data_source')}`"
+        )
 
 
 def recommendation_card(resp: AgentResponse):
@@ -41,13 +65,12 @@ def recommendation_card(resp: AgentResponse):
     st.markdown(
         f"<div class='wb-card'>"
         f"<div style='display:flex;flex-wrap:wrap;gap:8px;align-items:center;'>"
-        f"<span class='wb-badge'>{resp.plan.intent}</span>"
-        f"<span class='wb-badge'>{resp.trace.get('provider')} LLM</span>"
-        f"<span class='wb-badge'>confidence: {confidence}</span>"
+        f"<span class='wb-badge wb-badge--green'>{escape(resp.plan.intent)}</span>"
+        f"<span class='wb-badge'>{escape(str(resp.trace.get('provider')))} LLM</span>"
+        f"<span class='wb-badge wb-badge--red'>confidence: {confidence}</span>"
         f"</div>"
-        f"<h3 style='margin-top:8px;color:{PALETTE['field_green']};'>"
-        f"{resp.recommendation.headline}</h3>"
-        f"<div>{resp.explanation}</div>"
+        f"<h3>{escape(resp.recommendation.headline)}</h3>"
+        f"<div style='white-space:pre-line;'>{escape(resp.explanation)}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -55,13 +78,17 @@ def recommendation_card(resp: AgentResponse):
 
 def provider_pill():
     import os
+
     provider = os.getenv("LLM_PROVIDER", "mock")
-    color = {"watsonx": PALETTE["home_red"], "custom": PALETTE["field_green"],
-             "mock": PALETTE["leather_brown"]}.get(provider, PALETTE["away_navy"])
+    color = {
+        "watsonx": PALETTE["mlb_red"],
+        "custom": PALETTE["field_green"],
+        "mock": PALETTE["leather_brown"],
+    }.get(provider, PALETTE["mlb_navy"])
     st.markdown(
         f"<div style='display:inline-block;padding:4px 10px;border-radius:999px;"
-        f"background:{color};color:white;font-size:0.8rem;'>"
-        f"LLM: {provider}</div>",
+        f"background:{color};color:white;font-size:0.8rem;font-weight:700;'>"
+        f"LLM: {escape(provider)}</div>",
         unsafe_allow_html=True,
     )
 

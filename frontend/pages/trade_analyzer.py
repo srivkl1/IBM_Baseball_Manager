@@ -6,6 +6,7 @@ import streamlit as st
 
 from backend.data import espn_client
 from backend.trade_analyzer import analyze_trades
+from frontend.components import loading_state
 from frontend.roster_layout import add_roster_layout
 from frontend.theme import PALETTE, page_header
 
@@ -98,7 +99,10 @@ def render():
     with fairness_controls:
         max_gap = st.slider("Max value gap", 5, 40, 20, step=5, format="%d%%")
 
-    with st.spinner("Searching for fair mutual-benefit trades..."):
+    with loading_state(
+        "Searching for balanced trades",
+        "Comparing roster needs, ESPN production, injury value, and model projections.",
+    ):
         your_roster, target_roster, trades = analyze_trades(
             league,
             your_team,

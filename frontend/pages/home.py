@@ -4,13 +4,15 @@ from __future__ import annotations
 import streamlit as st
 
 from backend.draft import league_state
-from frontend.components import agent_trace, ensure_pipeline, recommendation_card
+from frontend.components import agent_trace, ensure_pipeline, loading_state, recommendation_card
 from frontend.theme import page_header
 
 
 def render():
-    page_header("Werbley's Squad — Fantasy Baseball Assistant",
-                "Ask for draft picks, trade ideas, player trends, or standings.")
+    page_header(
+        "Werbley's Squad - Fantasy Baseball Assistant",
+        "Ask for draft picks, trade ideas, player trends, standings, or baseball facts.",
+    )
 
     ensure_pipeline()
 
@@ -25,30 +27,42 @@ def render():
 
     skill = st.radio("Skill level", ["beginner", "expert"], horizontal=True)
 
-    # Quick-launch buttons
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("Who should I pick next?"):
-            st.session_state["home_user_text"] = "Who should I pick next?"
-    with col2:
-        if st.button("Should I trade X for Y?"):
-            st.session_state["home_user_text"] = "Should I trade X for Y?"
-    with col3:
-        if st.button("Is [player] trending up?"):
-            st.session_state["home_user_text"] = "Is [player] trending up?"
+    st.caption("Try a prompt")
+    prompt_rows = [
+        [
+            ("Top draft picks", "Who are the top draft picks for this year's draft?"),
+            ("Top OF", "Who are the top outfielders for this year's draft?"),
+            ("Top SP", "Who are the top starting pitchers?"),
+        ],
+        [
+            ("Best catchers", "List the best catchers for fantasy baseball."),
+            ("Trade idea", "Should I trade X for Y?"),
+            ("Player trend", "Why is Roki Sasaki performing poorly?"),
+        ],
+    ]
+    for row in prompt_rows:
+        cols = st.columns(len(row))
+        for col, (label, prompt) in zip(cols, row):
+            with col:
+                if st.button(label, use_container_width=True):
+                    st.session_state["home_user_text"] = prompt
 
     with st.form("home_chat_form"):
         user_text = st.text_input(
             "What do you want advice on?",
-            placeholder="e.g., 'Who should I pick next?' or 'Is Elly De La Cruz trending up?'",
+            placeholder="e.g., 'Who should I pick next?' or 'Why is Roki Sasaki performing poorly?'",
             key="home_user_text",
         )
         submit = st.form_submit_button("Ask Werbley")
 
     if submit and user_text.strip():
-        with st.spinner("Werbley is thinking…"):
+        with loading_state(
+            "Werbley is checking the matchup board",
+            "Pulling fantasy context, MLB data, and recent-stat signals.",
+        ):
             resp = ensure_pipeline().run(
-                user_text=user_text, skill_level=skill,
+                user_text=user_text,
+                skill_level=skill,
                 draft_state=st.session_state.get("draft_state"),
                 standings_table=st.session_state.get("standings_table"),
             )

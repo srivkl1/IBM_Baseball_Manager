@@ -6,6 +6,7 @@ import streamlit as st
 
 from backend.data import espn_client
 from backend.team_advisor import build_team_advice
+from frontend.components import loading_state
 from frontend.roster_layout import add_roster_layout
 from frontend.theme import PALETTE, page_header
 
@@ -20,11 +21,12 @@ def _team_default_index(teams) -> int:
 def _status_card(label: str, value: str, detail: str = ""):
     st.markdown(
         f"""
-        <div style="background:{PALETTE['baseline_white']};border:1px solid {PALETTE['dirt_tan']};
+        <div style="background:{PALETTE['card']};border:1px solid {PALETTE['line']};
+             border-top:4px solid {PALETTE['mlb_red']};box-shadow:0 8px 22px rgba(10,34,64,.06);
              padding:14px 16px;border-radius:8px;min-height:96px;">
-          <div style="font-size:.9rem;color:{PALETTE['away_navy']};opacity:.75;">{label}</div>
-          <div style="font-size:1.8rem;font-weight:800;color:{PALETTE['field_green']};">{value}</div>
-          <div style="font-size:.85rem;color:{PALETTE['away_navy']};opacity:.8;">{detail}</div>
+          <div style="font-size:.9rem;color:{PALETTE['muted']};">{label}</div>
+          <div style="font-size:1.8rem;font-weight:800;color:{PALETTE['mlb_navy']};">{value}</div>
+          <div style="font-size:.85rem;color:{PALETTE['muted']};">{detail}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -96,14 +98,9 @@ def _team_page_css():
     st.markdown(
         f"""
         <style>
-          [data-testid="stDataFrame"] {{
-            background: {PALETTE['baseline_white']};
-            border: 1px solid {PALETTE['dirt_tan']};
-            border-radius: 8px;
-          }}
-          [data-testid="stDataFrame"] div,
-          [data-testid="stDataFrame"] span {{
-            color: {PALETTE['away_navy']} !important;
+          [data-testid="stMain"] .stCaption,
+          [data-testid="stMain"] [data-testid="stCaptionContainer"] {{
+            color: {PALETTE['muted']} !important;
           }}
         </style>
         """,
@@ -161,7 +158,10 @@ def render():
         )
         return
 
-    with st.spinner("Building roster report from ESPN and advanced statistics..."):
+    with loading_state(
+        "Building roster report",
+        "Reading ESPN league data, player photos, free agents, and advanced stats.",
+    ):
         roster_df, fa_df, suggestions_df = build_team_advice(
             selected_team, league, free_agent_size=int(free_agent_size)
         )

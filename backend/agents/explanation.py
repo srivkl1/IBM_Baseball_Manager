@@ -9,19 +9,21 @@ from __future__ import annotations
 from typing import Optional
 
 from backend.agents.analysis import Recommendation
+from backend.baseball_knowledge import answer_basic_question
 from backend.llm import LLM, get_llm
 
 
 SYSTEM_TEMPLATES = {
     "beginner": (
         "You are a friendly fantasy-baseball coach. Explain recommendations using "
-        "plain language. Avoid jargon. Use this structure when possible: "
-        "Recommendation, Why, Risk, Confidence. Use 4 short sentences max."
+        "plain language. Avoid jargon. Answer naturally. For advice requests, include "
+        "the recommendation and a brief why; mention risk/confidence only when useful. "
+        "Use 4 short sentences max."
     ),
     "expert": (
         "You are a sharp fantasy-baseball analyst. Use advanced stats (wRC+, xFIP, "
-        "Barrel%, projected PA, WAR). Use this structure when possible: "
-        "Recommendation, Why, Risk, Confidence. Be concise: 4-6 sentences with concrete numbers."
+        "Barrel%, projected PA, WAR) when they are relevant. Answer naturally instead "
+        "of forcing a template; for advice requests include concrete numbers. Be concise."
     ),
 }
 
@@ -50,8 +52,12 @@ class Explanation:
         self.llm = llm or get_llm()
 
     def explain(self, rec: Recommendation, skill_level: str = "beginner") -> str:
+        if rec.intent == "general_qa":
+            return self._explain_general_qa(rec, skill_level)
         if rec.intent == "player_bio":
-            return self._explain_player_bio(rec)
+            return self._explain_player_bio(rec, skill_level)
+        if rec.metrics.get("response_style") == "player_list":
+            return self._explain_player_list(rec)
         if rec.intent == "roster_lookup":
             if not rec.candidates:
                 return rec.headline
@@ -67,51 +73,72 @@ class Explanation:
         text = self.llm.generate(prompt, system=sys, max_tokens=300, temperature=0.3)
         return text.strip()
 
-    @staticmethod
-    def _explain_player_bio(rec: Recommendation) -> str:
+    def _explain_player_list(self, rec: Recommendation) -> str:
+        if not rec.candidates:
+            return rec.headline
+        lines = [f"{rec.headline}:"]
+        for c in rec.candidates[:10]:
+            health = c.get("health", "Active")
+            adjusted = c.get("health_adjusted_proj_pts", c.get("proj_pts"))
+            raw = c.get("proj_pts")
+            projection_text = f"{adjusted} health-adjusted pts"
+            if raw is not None and adjusted != raw:
+                projection_text += f" ({raw} raw)"
+            health = f"{health}: {c.get('injury_note')}" if c.get("injury_note") else health
+            lines.append(
+                f"{c.get('rank')}. {c.get('name')} ({c.get('position')}, {c.get('team')}) - "
+                f"{projection_text}, {health}, tier {c.get('tier')}."
+            )
+        basis = rec.metrics.get("basis")
+        if basis:
+            lines.append(f"Basis: {basis}.")
+        return "\n".join(lines)
+
+    def _explain_general_qa(self, rec: Recommendation, skill_level: str) -> str:
+        question = rec.metrics.get("question") or rec.headline
+        basic_answer = answer_basic_question(question)
+        if basic_answer:
+            return basic_answer
+        system = (
+            "You are a helpful baseball and fantasy-baseball assistant. "
+            "Answer the user's question directly using your general baseball knowledge. "
+            "If the question is not about baseball or fantasy baseball, answer briefly and say the app is optimized for baseball. "
+            "Do not force the answer into draft, waiver, roster, or trade advice unless the user asks for that."
+        )
+        if skill_level == "beginner":
+            system += " Use plain language and keep it concise."
+        else:
+            system += " You may include concise expert context when useful."
+        text = self.llm.generate(
+            prompt=question,
+            system=system,
+            max_tokens=220,
+            temperature=0.2,
+        )
+        return text.strip()
+
+    def _explain_player_bio(self, rec: Recommendation, skill_level: str) -> str:
         if not rec.candidates:
             return rec.headline
         player = rec.candidates[0]
-        name = player.get("name", "This player")
-        position = player.get("primary_position") or "baseball player"
-        team = player.get("current_team") or "an MLB organization"
-        age = player.get("age")
-        birthplace = player.get("birthplace") or "unknown birthplace"
-        bats = player.get("bats") or "unknown"
-        throws = player.get("throws") or "unknown"
-        debut = player.get("mlb_debut")
-        teams = player.get("teams_played_recent") or []
-        stats = player.get("recent_stats") or []
-        news = player.get("news") or []
-
-        parts = [
-            f"{name} is a {position} for {team}.",
-            f"He is {age if age else 'age unknown'} and is from {birthplace}; he bats {bats.lower()} and throws {throws.lower()}.",
-        ]
-        if debut:
-            parts.append(f"He made his MLB debut on {debut}.")
-        if teams:
-            parts.append(f"Teams in his MLB record include {', '.join(teams[:5])}.")
-        if stats:
-            stat_bits = []
-            for row in stats[:2]:
-                if row.get("role") == "Batter":
-                    stat_bits.append(
-                        f"as a hitter, wRC+ {row.get('wRC+')}, {row.get('HR')} HR, WAR {row.get('WAR')}"
-                    )
-                elif row.get("role") == "Pitcher":
-                    stat_bits.append(
-                        f"as a pitcher, FIP {row.get('FIP')}, xFIP {row.get('xFIP')}, WAR {row.get('WAR')}"
-                    )
-            if stat_bits:
-                parts.append("Current performance context: " + "; ".join(stat_bits) + ".")
-        if news:
-            headlines = [item.get("headline", "") for item in news if item.get("headline")]
-            if headlines:
-                parts.append("Recent news notes: " + " | ".join(headlines[:3]) + ".")
+        system = (
+            "You are a baseball assistant. Write a natural player bio from the supplied facts. "
+            "Say who the player is, what they do, age/origin/team history when available, and include fantasy/stat context briefly. "
+            "Do not make up facts. If no news items are supplied, do not invent news; simply omit news or say none was found if helpful."
+        )
+        if skill_level == "beginner":
+            system += " Keep it readable and concise."
         else:
-            parts.append("I did not find recent ESPN news items for him in the connected data, so this answer is based on MLB bio, team history, and stat context.")
-        return " ".join(parts)
+            system += " You can include compact advanced-stat context."
+        prompt = (
+            f"User asked for a player bio.\n"
+            f"Headline: {rec.headline}\n"
+            f"Facts: {player}\n"
+            f"Rationale/context bullets: {rec.rationale_bullets}\n"
+            "Write the answer in 1 short paragraph or 4 compact sentences."
+        )
+        text = self.llm.generate(prompt=prompt, system=system, max_tokens=260, temperature=0.25)
+        return text.strip()
 
     def self_evaluate(self, rec: Recommendation, explanation: str) -> dict:
         """Simple quality check: did the explanation reference the headline pick?"""

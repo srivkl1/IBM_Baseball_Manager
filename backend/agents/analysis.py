@@ -19,6 +19,15 @@ from backend.team_advisor import add_il_impact
 from backend.trade_analyzer import analyze_trades
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class Recommendation:
     intent: str
@@ -53,6 +62,8 @@ class Analysis:
             return self._analyze_trend(bundle)
         if intent == "standings_check":
             return self._analyze_standings(bundle)
+        if intent == "general_qa":
+            return self._analyze_general_qa(bundle)
         return Recommendation(intent=intent, headline="No analysis path for this intent.")
 
     @staticmethod
@@ -88,17 +99,24 @@ class Analysis:
 
     def _analyze_draft(self, bundle: Dict[str, Any],
                        draft_state: Optional[sim.DraftState]) -> Recommendation:
+        user_text = str(bundle.get("user_text", ""))
+        if self._is_player_list_query(user_text):
+            return self._analyze_player_list(bundle)
+
         pool = self._available_pool(bundle["player_pool"], bundle, draft_state)
         if draft_state is None:
             top = pool.head(10)
             cands = [{
                 "name": r["Name"], "role": r["role"], "position": r.get("fantasy_position", r["role"]), "team": r.get("Team", ""),
                 "proj_pts": round(float(r.get("proj_pts", r.get("draft_score", 0))), 1),
+                "health_adjusted_proj_pts": round(float(r.get("health_adjusted_proj_pts", r.get("proj_pts", r.get("draft_score", 0)))), 1),
+                "health": r.get("health_status", "Active"),
+                "injury_note": self._injury_note(r),
                 "rank": int(r["rank"]),
                 "tier": int(r["tier"]),
             } for _, r in top.iterrows()]
             bullets = [
-                f"{c['name']} ({c['position']}) - projected {c['proj_pts']} pts, tier {c['tier']}"
+                f"{c['name']} ({c['position']}) - health-adjusted {c['health_adjusted_proj_pts']} pts, tier {c['tier']}, {c['health']}"
                 for c in cands[:3]
             ]
             return Recommendation(
@@ -115,6 +133,9 @@ class Analysis:
         cands = [{
             "name": r["Name"], "role": r["role"], "position": r.get("fantasy_position", r["role"]), "team": r.get("Team", ""),
             "proj_pts": round(float(r.get("proj_pts", r.get("draft_score", 0))), 1),
+            "health_adjusted_proj_pts": round(float(r.get("health_adjusted_proj_pts", r.get("proj_pts", r.get("draft_score", 0)))), 1),
+            "health": r.get("health_status", "Active"),
+            "injury_note": self._injury_note(r),
             "suitability": round(float(r["suitability"]), 1),
             "tier": int(r["tier"]),
         } for _, r in recs.iterrows()]
@@ -133,7 +154,8 @@ class Analysis:
         for c in cands[:3]:
             bullets.append(
                 f"{c['name']} ({c['position']}, {c['team']}) - projected "
-                f"{c['proj_pts']} pts, tier {c['tier']}, fit {c['suitability']}"
+                f"{c['proj_pts']} pts, health-adjusted {c['health_adjusted_proj_pts']}, "
+                f"{c['health']}, tier {c['tier']}, fit {c['suitability']}"
             )
         return Recommendation(
             intent="draft_pick",
@@ -143,6 +165,110 @@ class Analysis:
             metrics={"pick_number": draft_state.current_pick_number,
                      "team_on_clock": rec_team or draft_state.team_on_clock()},
         )
+
+    @staticmethod
+    def _is_player_list_query(text: str) -> bool:
+        t = text.lower()
+        list_words = ("top", "best", "rank", "ranking", "list", "good", "elite")
+        subject_words = (
+            "players", "draft picks", "picks", "catchers", "pitchers", "hitters",
+            "outfielders", "basemen", "shortstops", "starters", "relievers",
+            "1b", "2b", "3b", "ss", "of", "sp", "rp", "c",
+        )
+        return any(word in t for word in list_words) and any(word in t for word in subject_words)
+
+    @staticmethod
+    def _position_filter_from_text(text: str) -> Optional[set[str]]:
+        t = text.lower()
+        position_aliases = [
+            (("catcher", "catchers", " c "), {"C"}),
+            (("first base", "first basemen", "1b"), {"1B"}),
+            (("second base", "second basemen", "2b"), {"2B"}),
+            (("third base", "third basemen", "3b"), {"3B"}),
+            (("shortstop", "shortstops", " ss "), {"SS"}),
+            (("outfield", "outfielder", "outfielders", " of "), {"OF"}),
+            (("starting pitcher", "starting pitchers", "starter", "starters", "sp"), {"SP"}),
+            (("relief pitcher", "relief pitchers", "reliever", "relievers", "closer", "closers", "rp"), {"RP"}),
+            (("pitcher", "pitchers"), {"SP", "RP", "PIT", "P"}),
+            (("hitter", "hitters", "batter", "batters"), {"C", "1B", "2B", "3B", "SS", "OF", "BAT"}),
+        ]
+        padded = f" {t} "
+        for aliases, positions in position_aliases:
+            if any(alias in padded for alias in aliases):
+                return positions
+        return None
+
+    def _analyze_player_list(self, bundle: Dict[str, Any]) -> Recommendation:
+        pool: pd.DataFrame = bundle.get("player_pool")
+        if pool is None or pool.empty:
+            return Recommendation("draft_pick", "Need a player pool before ranking players.")
+
+        user_text = str(bundle.get("user_text", ""))
+        positions = self._position_filter_from_text(user_text)
+        ranked = pool.copy()
+        scope = "overall"
+        if positions:
+            pos_series = ranked.get("fantasy_position", ranked.get("role", "")).astype(str).str.upper()
+            role_series = ranked.get("role", "").astype(str).str.upper()
+            ranked = ranked[pos_series.isin(positions) | role_series.isin(positions)]
+            scope = "/".join(sorted(positions))
+        if ranked.empty:
+            return Recommendation(
+                "draft_pick",
+                f"No players matched that position filter ({scope}).",
+                rationale_bullets=["Try asking for top hitters, pitchers, OF, SP, RP, SS, 1B, 2B, 3B, or C."],
+                metrics={"response_style": "player_list", "position_scope": scope},
+            )
+
+        sort_col = (
+            "health_adjusted_proj_pts" if "health_adjusted_proj_pts" in ranked.columns
+            else "health_adjusted_draft_score" if "health_adjusted_draft_score" in ranked.columns
+            else "draft_score" if "draft_score" in ranked.columns
+            else "proj_pts"
+        )
+        if sort_col in ranked:
+            ranked = ranked.sort_values(sort_col, ascending=False)
+        elif "rank" in ranked:
+            ranked = ranked.sort_values("rank", ascending=True)
+        top = ranked.head(10)
+        cands = []
+        for idx, (_, r) in enumerate(top.iterrows(), start=1):
+            cands.append({
+                "rank": idx,
+                "name": r["Name"],
+                "position": r.get("fantasy_position", r.get("role", "")),
+                "team": r.get("Team", ""),
+                "proj_pts": round(float(r.get("proj_pts", r.get("draft_score", 0)) or 0), 1),
+                "health_adjusted_proj_pts": round(float(r.get("health_adjusted_proj_pts", r.get("proj_pts", r.get("draft_score", 0))) or 0), 1),
+                "health": r.get("health_status", "Active"),
+                "injury_note": self._injury_note(r),
+                "tier": int(r.get("tier", 0) or 0),
+                "three_year_rank": int(r.get("rank", idx) or idx),
+            })
+        title_scope = "overall" if scope == "overall" else f"at {scope}"
+        bullets = [
+            f"{c['rank']}. {c['name']} ({c['position']}, {c['team']}) - health-adjusted {c['health_adjusted_proj_pts']} pts, "
+            f"raw projection {c['proj_pts']}, {c['health']}, tier {c['tier']}"
+            for c in cands
+        ]
+        return Recommendation(
+            intent="draft_pick",
+            headline=f"Top {len(cands)} draft targets {title_scope}",
+            candidates=cands,
+            rationale_bullets=bullets,
+            metrics={
+                "response_style": "player_list",
+                "position_scope": scope,
+                "ranked_pool_size": int(len(ranked)),
+                "basis": "health-adjusted model projection, recent form, historical rank, and tier",
+            },
+        )
+
+    @staticmethod
+    def _injury_note(row: pd.Series) -> str:
+        if str(row.get("health_status", "Active")) == "Active":
+            return ""
+        return str(row.get("public_injury_detail", "") or row.get("espn_injury_status", "") or "")
 
     def _analyze_roster_move(self, bundle: Dict[str, Any]) -> Recommendation:
         pool: pd.DataFrame = bundle.get("player_pool")
@@ -435,6 +561,7 @@ class Analysis:
             player_rec = self._analyze_named_player(query_name, recent_bat, recent_pitch, bundle)
             if player_rec is not None:
                 return player_rec
+            return self._analyze_missing_named_player(query_name, bundle)
         if recent_bat is None or len(recent_bat) == 0:
             return Recommendation(intent="player_trend",
                                   headline="No recent data available.")
@@ -450,6 +577,99 @@ class Analysis:
                                f"and a .{int(c['AVG']*1000):03d} AVG"
                                for c in cands[:3]],
         )
+
+    def _analyze_missing_named_player(self, query_name: str, bundle: Dict[str, Any]) -> Recommendation:
+        prospects = bundle.get("prospects")
+        prospect_rows = self._name_match(prospects, query_name) if prospects is not None else pd.DataFrame()
+        bio = mlb_stats.player_bio(query_name)
+        mlb_summary = mlb_stats.player_season_summary(query_name, CONFIG.oot_season)
+        candidate: Dict[str, Any] = {"name": query_name}
+        bullets = [
+            f"I found the player name '{query_name}', but not a current-season batting or pitching row in the loaded stats table.",
+            "That usually means the player has a small MLB sample or is not qualified for the pulled advanced-stat leaderboards.",
+        ]
+        if bio:
+            candidate.update(bio)
+            if bio.get("primary_position") == "TWP":
+                candidate["primary_position"] = "two-way player"
+            bullets.append(
+                f"Bio context: {bio.get('name', query_name)} is listed as {candidate.get('primary_position', 'a player')} for {bio.get('current_team') or 'an MLB organization'}."
+            )
+        if mlb_summary:
+            candidate["mlb_api_summary"] = mlb_summary
+            hitting = mlb_summary.get("hitting")
+            pitching = mlb_summary.get("pitching")
+            if hitting:
+                bullets.append(
+                    f"MLB API {mlb_summary.get('season')} hitting line: "
+                    f"{hitting.get('games')} G, AVG {hitting.get('avg')}, OPS {hitting.get('ops')}, "
+                    f"{hitting.get('home_runs')} HR, {hitting.get('rbi')} RBI."
+                )
+            if pitching:
+                candidate["performance_read"] = (
+                    "struggling" if _safe_float(pitching.get("era"), 0.0) >= 5.00
+                    or _safe_float(pitching.get("whip"), 0.0) >= 1.40 else "limited sample"
+                )
+                bullets.append(
+                    f"MLB API {mlb_summary.get('season')} pitching line: "
+                    f"{pitching.get('games')} G/{pitching.get('games_started')} GS, "
+                    f"{pitching.get('innings')} IP, ERA {pitching.get('era')}, WHIP {pitching.get('whip')}, "
+                    f"{pitching.get('strikeouts')} K, {pitching.get('walks')} BB."
+                )
+        fantasy_line = self._fantasy_context_for_player(query_name, bundle.get("league"))
+        if fantasy_line:
+            candidate["espn_fantasy"] = fantasy_line
+            bullets.append(
+                f"ESPN fantasy context: {fantasy_line['team_status']} for {fantasy_line.get('fantasy_team', 'free agent')}, "
+                f"{fantasy_line.get('espn_points', 0)} pts, {fantasy_line.get('espn_avg', 0)} avg."
+            )
+        if not prospect_rows.empty:
+            row = prospect_rows.iloc[0].to_dict()
+            candidate.update({"prospect": row})
+            fv = row.get("FV", row.get("future_value", ""))
+            team = row.get("Team", "")
+            bullets.append(f"Prospect context: {row.get('Name', query_name)} appears in the prospect data for {team} with FV {fv}.")
+        headline = f"{query_name} has limited current-stat data loaded"
+        pitching = mlb_summary.get("pitching") if mlb_summary else None
+        hitting = mlb_summary.get("hitting") if mlb_summary else None
+        if pitching:
+            headline = (
+                f"{query_name}: MLB API shows a rough pitching line "
+                f"({pitching.get('era')} ERA, {pitching.get('whip')} WHIP)"
+            )
+        elif hitting:
+            headline = (
+                f"{query_name}: MLB API hitting line "
+                f"({hitting.get('avg')} AVG, {hitting.get('ops')} OPS)"
+            )
+
+        return Recommendation(
+            intent="player_trend",
+            headline=headline,
+            candidates=[candidate],
+            rationale_bullets=bullets,
+            metrics={"matched_query": query_name, "data_gap": "no current batting/pitching row"},
+        )
+
+    @staticmethod
+    def _fantasy_context_for_player(query_name: str, league) -> Optional[dict]:
+        if league is None:
+            return None
+        query = query_name.strip().casefold()
+        for team in getattr(league, "teams", []):
+            for player in getattr(team, "roster", []):
+                if player.name.strip().casefold() == query:
+                    return {
+                        "team_status": "rostered",
+                        "fantasy_team": team.name,
+                        "position": player.fantasy_position,
+                        "espn_points": round(float(player.total_points), 1),
+                        "espn_avg": round(float(player.avg_points), 2),
+                        "rostership": round(float(player.rostership), 1),
+                        "games": round(float(player.games_played), 0),
+                        "projected_points": round(float(player.projected_total_points), 1),
+                    }
+        return None
 
     def _analyze_player_bio(self, bundle: Dict[str, Any]) -> Recommendation:
         query_name = self._extract_player_query(bundle.get("user_text", ""))
@@ -523,19 +743,42 @@ class Analysis:
         patterns = [
             r"who is\s+(.+)$",
             r"tell me about\s+(.+)$",
+            r"what team does\s+(.+?)\s+play for$",
+            r"which team does\s+(.+?)\s+play for$",
+            r"where does\s+(.+?)\s+play$",
+            r"how old is\s+(.+)$",
+            r"where is\s+(.+?)\s+from$",
+            r"where was\s+(.+?)\s+born$",
             r"how is\s+(.+)$",
+            r"why is\s+(.+?)(?:\s+so\s+\w+)?$",
+            r"why has\s+(.+?)(?:\s+been\s+\w+)?$",
+            r"what happened to\s+(.+)$",
             r"what about\s+(.+)$",
             r"(.+?)\s+(?:trend|hot|cold|slump|streak)$",
         ]
         for pattern in patterns:
             match = re.search(pattern, cleaned, flags=re.IGNORECASE)
             if match:
-                name = match.group(1).strip()
-                return re.sub(r"^(the player|player)\s+", "", name, flags=re.IGNORECASE)
+                return Analysis._clean_player_query(match.group(1))
         tokens = cleaned.split()
         if 2 <= len(tokens) <= 4 and not cleaned.lower().startswith(("scan ", "show ", "find ")):
-            return cleaned
+            return Analysis._clean_player_query(cleaned)
         return ""
+
+    @staticmethod
+    def _clean_player_query(name: str) -> str:
+        name = re.sub(r"^(the player|player)\s+", "", name.strip(), flags=re.IGNORECASE)
+        trailing_context = [
+            r"\s+performing\s+(?:poorly|badly|well|great|terribly)$",
+            r"\s+playing\s+(?:poorly|badly|well|great|terribly)$",
+            r"\s+(?:doing|looking)\s+(?:poorly|badly|well|great|terrible|rough)$",
+            r"\s+(?:doing|performing|playing|looking)$",
+            r"\s+(?:struggling|slumping|cold|hot|washed|rough)$",
+            r"\s+(?:bad|good|great|terrible|poor|elite|mid)$",
+        ]
+        for pattern in trailing_context:
+            name = re.sub(pattern, "", name, flags=re.IGNORECASE).strip()
+        return name
 
     @staticmethod
     def _name_match(df: Optional[pd.DataFrame], query_name: str) -> pd.DataFrame:
@@ -560,71 +803,108 @@ class Analysis:
         rows = []
         if not bat_match.empty:
             r = bat_match.iloc[0]
+            wrc = float(r.get("wRC+", 0) or 0)
+            hr = int(r.get("HR", 0) or 0)
+            avg = float(r.get("AVG", 0) or 0)
+            war = float(r.get("WAR", 0) or 0)
+            peer_wrc = float(recent_bat["wRC+"].median()) if recent_bat is not None and "wRC+" in recent_bat else 100.0
+            peer_war = float(recent_bat["WAR"].median()) if recent_bat is not None and "WAR" in recent_bat else 0.0
             rows.append({
                 "name": r["Name"],
                 "role": "Batter",
                 "team": r.get("Team", ""),
-                "wRC+": round(float(r.get("wRC+", 0) or 0), 0),
-                "HR": int(r.get("HR", 0) or 0),
-                "AVG": round(float(r.get("AVG", 0) or 0), 3),
-                "WAR": round(float(r.get("WAR", 0) or 0), 1),
+                "wRC+": round(wrc, 0),
+                "HR": hr,
+                "AVG": round(avg, 3),
+                "WAR": round(war, 1),
+                "peer_wRC+_median": round(peer_wrc, 0),
+                "peer_WAR_median": round(peer_war, 1),
+                "performance_read": "below average" if wrc < 95 else "above average" if wrc > 110 else "around average",
             })
         if not pitch_match.empty:
             r = pitch_match.iloc[0]
+            fip = float(r.get("FIP", 0) or 0)
+            xfip = float(r.get("xFIP", 0) or 0)
+            k_pct = float(r.get("K%", 0) or 0)
+            war = float(r.get("WAR", 0) or 0)
+            peer_fip = float(recent_pitch["FIP"].median()) if recent_pitch is not None and "FIP" in recent_pitch else 4.20
+            peer_k = float(recent_pitch["K%"].median()) if recent_pitch is not None and "K%" in recent_pitch else 22.0
             rows.append({
                 "name": r["Name"],
                 "role": "Pitcher",
                 "team": r.get("Team", ""),
-                "FIP": round(float(r.get("FIP", 0) or 0), 2),
-                "xFIP": round(float(r.get("xFIP", 0) or 0), 2),
-                "K%": round(float(r.get("K%", 0) or 0), 1),
-                "WAR": round(float(r.get("WAR", 0) or 0), 1),
+                "FIP": round(fip, 2),
+                "xFIP": round(xfip, 2),
+                "K%": round(k_pct, 1),
+                "WAR": round(war, 1),
+                "peer_FIP_median": round(peer_fip, 2),
+                "peer_K%_median": round(peer_k, 1),
+                "performance_read": "struggling" if fip > peer_fip + 0.5 else "strong" if fip < peer_fip - 0.5 else "around average",
             })
         if not rows:
             return None
 
-        league = bundle.get("league")
-        fantasy_line = None
-        if league is not None:
-            query = rows[0]["name"].strip().casefold()
-            for team in league.teams:
-                for player in team.roster:
-                    if player.name.strip().casefold() == query:
-                        fantasy_line = {
-                            "fantasy_team": team.name,
-                            "position": player.fantasy_position,
-                            "espn_points": round(float(player.total_points), 1),
-                            "espn_avg": round(float(player.avg_points), 2),
-                            "rostership": round(float(player.rostership), 1),
-                        }
-                        break
-                if fantasy_line:
-                    break
+        resolved_name = rows[0]["name"]
+        fantasy_line = self._fantasy_context_for_player(resolved_name, bundle.get("league"))
+        mlb_summary = mlb_stats.player_season_summary(resolved_name, CONFIG.oot_season)
+        has_mlb_stats = bool(mlb_summary.get("hitting") or mlb_summary.get("pitching"))
         candidates = rows.copy()
         if fantasy_line:
-            candidates[0].update(fantasy_line)
+            candidates[0]["espn_fantasy"] = fantasy_line
+            candidates[0].update({
+                "fantasy_team": fantasy_line.get("fantasy_team"),
+                "position": fantasy_line.get("position"),
+                "espn_points": fantasy_line.get("espn_points"),
+                "espn_avg": fantasy_line.get("espn_avg"),
+                "rostership": fantasy_line.get("rostership"),
+                "games": fantasy_line.get("games"),
+                "projected_points": fantasy_line.get("projected_points"),
+            })
+        if has_mlb_stats:
+            candidates[0]["mlb_api_summary"] = mlb_summary
 
         bullets = []
+        if has_mlb_stats:
+            hitting = mlb_summary.get("hitting")
+            pitching = mlb_summary.get("pitching")
+            if hitting:
+                bullets.append(
+                    f"MLB API {mlb_summary.get('season')} hitting line: "
+                    f"{hitting.get('games')} G, AVG {hitting.get('avg')}, OPS {hitting.get('ops')}, "
+                    f"{hitting.get('home_runs')} HR, {hitting.get('rbi')} RBI."
+                )
+            if pitching:
+                bullets.append(
+                    f"MLB API {mlb_summary.get('season')} pitching line: "
+                    f"{pitching.get('games')} G/{pitching.get('games_started')} GS, "
+                    f"{pitching.get('innings')} IP, ERA {pitching.get('era')}, WHIP {pitching.get('whip')}, "
+                    f"{pitching.get('strikeouts')} K, {pitching.get('walks')} BB."
+                )
         for row in rows:
             if row["role"] == "Batter":
                 bullets.append(
-                    f"{row['name']} is a batter: wRC+ {row['wRC+']}, {row['HR']} HR, AVG {row['AVG']:.3f}, WAR {row['WAR']}"
+                    f"Advanced stats: {row['name']} is a batter with wRC+ {row['wRC+']} vs peer median {row['peer_wRC+_median']}, {row['HR']} HR, AVG {row['AVG']:.3f}, WAR {row['WAR']}; read: {row['performance_read']}"
                 )
             else:
                 bullets.append(
-                    f"{row['name']} is a pitcher: FIP {row['FIP']}, xFIP {row['xFIP']}, K% {row['K%']}, WAR {row['WAR']}"
+                    f"Advanced stats: {row['name']} is a pitcher with FIP {row['FIP']} vs peer median {row['peer_FIP_median']}, xFIP {row['xFIP']}, K% {row['K%']} vs peer median {row['peer_K%_median']}, WAR {row['WAR']}; read: {row['performance_read']}"
                 )
         if fantasy_line:
             bullets.append(
-                f"Fantasy context: {fantasy_line['espn_points']} ESPN pts, {fantasy_line['espn_avg']} avg, rostered by {fantasy_line['fantasy_team']}"
+                f"ESPN fantasy context: {fantasy_line['team_status']} for {fantasy_line.get('fantasy_team', 'free agent')}, "
+                f"{fantasy_line.get('espn_points', 0)} pts, {fantasy_line.get('espn_avg', 0)} avg."
             )
 
         return Recommendation(
             intent="player_trend",
-            headline=f"{rows[0]['name']} player profile",
+            headline=f"{resolved_name} player profile",
             candidates=candidates,
             rationale_bullets=bullets,
-            metrics={"matched_query": query_name, "roles_found": [row["role"] for row in rows]},
+            metrics={
+                "matched_query": query_name,
+                "roles_found": [row["role"] for row in rows],
+                "sources": ["advanced_stats"] + (["mlb_api"] if has_mlb_stats else []) + (["espn_fantasy"] if fantasy_line else []),
+            },
         )
 
     def _analyze_standings(self, bundle: Dict[str, Any]) -> Recommendation:
@@ -651,4 +931,22 @@ class Analysis:
             headline=headline,
             candidates=table.to_dict(orient="records"),
             rationale_bullets=bullets,
+        )
+
+    def _analyze_general_qa(self, bundle: Dict[str, Any]) -> Recommendation:
+        question = str(bundle.get("user_text", "")).strip()
+        league = bundle.get("league")
+        league_context = {}
+        if league is not None:
+            league_context = {
+                "league_source": league.source,
+                "season": league.season,
+                "teams": len(league.teams),
+            }
+        return Recommendation(
+            intent="general_qa",
+            headline=question or "General baseball question",
+            candidates=[],
+            rationale_bullets=[],
+            metrics={"question": question, **league_context},
         )

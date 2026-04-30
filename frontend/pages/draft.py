@@ -8,7 +8,7 @@ from backend.agents.data_retrieval import DataRetrieval
 from backend.data import espn_client
 from backend.draft import league_state
 from backend.draft import simulator as sim
-from frontend.components import agent_trace, ensure_pipeline, recommendation_card
+from frontend.components import agent_trace, ensure_pipeline, loading_state, recommendation_card
 from frontend.roster_layout import add_roster_layout
 from frontend.theme import PALETTE, page_header
 
@@ -110,7 +110,7 @@ def render():
                               else FALLBACK_TEAM_NAMES[i])
             team_names.append(st.text_input(f"Team {i+1} name",
                                             value=suggested_name, key=f"team_{i}"))
-        human_index = st.selectbox("You are…", range(len(team_names)),
+        human_index = st.selectbox("You are...", range(len(team_names)),
                                    index=min(defaults["human_index"], len(team_names) - 1),
                                    format_func=lambda i: team_names[i])
         if st.button("Start / restart draft"):
@@ -135,21 +135,25 @@ def render():
         if state.source == "espn-import":
             st.success("This ESPN league is already drafted, so the app is using the live league rosters directly.")
         elif state.is_complete:
-            st.success("Draft complete — head to the **Season tracker** page.")
+            st.success("Draft complete - head to the **Season tracker** page.")
         else:
             round_num, slot = state.round_and_slot()
             on_clock = state.team_on_clock()
             st.markdown(
-                f"**Round {round_num} · Pick {slot} · On the clock: "
+                f"**Round {round_num} | Pick {slot} | On the clock: "
                 f"<span style='color:{PALETTE['home_red']};'>"
                 f"{on_clock}</span>**", unsafe_allow_html=True,
             )
             if state.human_on_clock():
-                resp = ensure_pipeline().run(
-                    user_text=f"Recommend my round {round_num} pick",
-                    skill_level=st.session_state.get("skill_level", "beginner"),
-                    draft_state=state,
-                )
+                with loading_state(
+                    "Evaluating the draft board",
+                    "Checking available players, roster fit, and projection tiers.",
+                ):
+                    resp = ensure_pipeline().run(
+                        user_text=f"Recommend my round {round_num} pick",
+                        skill_level=st.session_state.get("skill_level", "beginner"),
+                        draft_state=state,
+                    )
                 recommendation_card(resp)
                 agent_trace(resp)
 
@@ -161,7 +165,7 @@ def render():
                     sim.apply_pick(state, choice)
                     st.rerun()
             else:
-                st.info(f"Waiting for {on_clock}…")
+                st.info(f"Waiting for {on_clock}...")
 
         st.markdown("#### Top 15 still on the board")
         avail = state.board[state.board["available"]].head(15)

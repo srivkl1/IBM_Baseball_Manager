@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from backend.baseball_knowledge import answer_basic_question
 from backend.llm import LLM, get_llm
 
 INTENTS = {
@@ -24,6 +25,7 @@ INTENTS = {
     "player_bio": "Explain who a player is using bio, career, fantasy, and news context.",
     "player_trend": "Explain recent performance trend for a player.",
     "standings_check": "Report current standings or season progress.",
+    "general_qa": "Answer a general baseball or fantasy-baseball question directly.",
 }
 
 
@@ -44,6 +46,26 @@ class OrchestratorPlan:
 
 def _rule_based_intent(text: str) -> tuple[str, float]:
     t = text.lower()
+    if answer_basic_question(text):
+        return "general_qa", 0.92
+    if any(k in t for k in ("top", "best", "rank", "ranking", "list", "good", "elite")) and any(k in t for k in (
+        "players", "draft picks", "picks", "catchers", "pitchers", "hitters",
+        "outfielders", "basemen", "shortstops", "starters", "relievers",
+        "1b", "2b", "3b", "ss", "of", "sp", "rp",
+    )):
+        return "draft_pick", 0.88
+    if any(k in t for k in (
+        "what team does ", "which team does ", "where does ",
+        "how old is ", "where is ", "where was ",
+    )) and not any(k in t for k in ("mlb team", "baseball team", "teams are", "team is from")):
+        return "player_bio", 0.86
+    if any(k in t for k in (
+        "why is ", "why has ", "how is ", "what happened to ",
+    )) and any(k in t for k in (
+        "bad", "good", "great", "struggling", "struggle", "slumping", "slump",
+        "cold", "hot", "doing", "performing", "washed", "rough",
+    )):
+        return "player_trend", 0.88
     if any(k in t for k in ("risk", "risky", "injury", "injured", "playing time", "role security")):
         return "risk_check", 0.82
     if any(k in t for k in ("lineup", "start", "bench", "optimize")):
@@ -54,7 +76,7 @@ def _rule_based_intent(text: str) -> tuple[str, float]:
         "who's on joseph", "who is on joseph's", "who's on joseph's",
     )):
         return "roster_lookup", 0.95
-    if any(k in t for k in ("who is ", "who's ", "tell me about ", "bio", "background", "where is")):
+    if any(k in t for k in ("who is ", "who's ", "tell me about ", "bio", "background")):
         return "player_bio", 0.88
     if any(k in t for k in ("draft", "pick", "round", "on the clock", "bpa")):
         return "draft_pick", 0.85
@@ -73,7 +95,7 @@ def _rule_based_intent(text: str) -> tuple[str, float]:
         "how am i doing", "my team doing",
     )):
         return "standings_check", 0.80
-    return "draft_pick", 0.40
+    return "general_qa", 0.72
 
 
 class Orchestrator:
@@ -83,9 +105,11 @@ class Orchestrator:
     def plan(self, req: AgentRequest) -> OrchestratorPlan:
         intent, conf = _rule_based_intent(req.user_text)
 
-        if conf < 0.6:
+        if conf < 0.85:
             sys = ("You are an intent classifier for a fantasy-baseball assistant. "
                    f"Valid intents: {list(INTENTS)}. "
+                   "Choose specialized intents only when the user clearly asks for that app workflow. "
+                   "Use general_qa for normal baseball questions, trivia, rules, definitions, or broad conversation. "
                    "Reply ONLY as: intent=<one of them>.")
             reply = self.llm.generate(
                 f"Classify intent: {req.user_text}",
@@ -95,7 +119,7 @@ class Orchestrator:
             )
             for key in INTENTS:
                 if key in reply:
-                    intent, conf = key, 0.65
+                    intent, conf = key, max(conf, 0.75)
                     break
 
         clarification = None

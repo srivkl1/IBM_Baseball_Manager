@@ -99,7 +99,7 @@ def from_existing_rosters(board: pd.DataFrame, teams: List[str], rosters: dict,
                 role = row["role"]
                 mlb_team = row.get("Team", mlb_team)
                 fantasy_position = row.get("fantasy_position", fantasy_position)
-                proj_pts = float(row.get("proj_pts", row.get("draft_score", proj_pts)))
+                proj_pts = float(row.get("health_adjusted_proj_pts", row.get("proj_pts", row.get("draft_score", proj_pts))))
                 board.loc[[row.name], "available"] = False
             normalized_player = {
                 "player": name,
@@ -150,7 +150,10 @@ def _team_needs(state: DraftState, team: str) -> dict:
 def _score_candidate(state: DraftState, team: str, player_row: pd.Series) -> float:
     needs = _team_needs(state, team)
     role = player_row["role"]
-    base = float(player_row.get("proj_pts", player_row.get("draft_score", 0)))
+    base = float(player_row.get(
+        "health_adjusted_proj_pts",
+        player_row.get("proj_pts", player_row.get("draft_score", 0)),
+    ))
     roster = state.rosters.get(team, [])
     picks_made = len(roster)
     role_count = sum(1 for r in roster if r["role"] == role)
@@ -166,7 +169,8 @@ def _score_candidate(state: DraftState, team: str, player_row: pd.Series) -> flo
     jitter = np.random.default_rng(
         hash((team, player_row["Name"])) % (2**32)
     ).normal(0, 3)
-    return base + need_bonus + role_balance_bonus + early_pitching_bonus - stack_penalty + jitter
+    health_penalty = float(player_row.get("health_penalty", 0.0) or 0.0) * 120.0
+    return base + need_bonus + role_balance_bonus + early_pitching_bonus - stack_penalty - health_penalty + jitter
 
 
 def recommend_pick(state: DraftState, team: Optional[str] = None,
@@ -198,6 +202,9 @@ def apply_pick(state: DraftState, player_name: str) -> dict:
         "mlb_team": row.get("Team", ""),
         "fantasy_position": row.get("fantasy_position", row["role"]),
         "proj_pts": float(row.get("proj_pts", row.get("draft_score", 0))),
+        "health_adjusted_proj_pts": float(row.get("health_adjusted_proj_pts", row.get("proj_pts", row.get("draft_score", 0)))),
+        "health_status": row.get("health_status", "Active"),
+        "health_penalty": float(row.get("health_penalty", 0.0) or 0.0),
         "espn_total_points": float(row.get("espn_total_points", 0.0)),
         "espn_projected_total_points": float(row.get("espn_projected_total_points", 0.0)),
     }
@@ -210,6 +217,9 @@ def apply_pick(state: DraftState, player_name: str) -> dict:
             "mlb_team",
             "fantasy_position",
             "proj_pts",
+            "health_adjusted_proj_pts",
+            "health_status",
+            "health_penalty",
             "espn_total_points",
             "espn_projected_total_points",
         )

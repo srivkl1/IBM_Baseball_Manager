@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from backend.baseball_knowledge import answer_basic_question
+
 from .base import LLM
 
 
@@ -43,7 +45,13 @@ class MockLLM(LLM):
                 return "intent=player_trend"
             if any(k in p for k in ("standing", "rank", "place")):
                 return "intent=standings_check"
-            return "intent=draft_pick"
+            return "intent=general_qa"
+
+        if "general baseball knowledge" in s:
+            basic_answer = answer_basic_question(prompt)
+            if basic_answer:
+                return basic_answer
+            return "I can answer general baseball questions, but the live LLM provider is unavailable right now."
 
         if "recommend" in p or "analysis" in p:
             return ("Prioritize the top projected fWAR players still on the board, "
