@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Dict, List, Optional
-from urllib.parse import quote
 
 import pandas as pd
 import requests
@@ -76,6 +75,65 @@ def position_for_player(name: str, role: str = "", games_started: float = 0.0,
         games_started=games_started,
         games_played=games_played,
     )
+
+
+def player_bio(name: str) -> dict:
+    identity = resolve_player_identity(name)
+    if not identity:
+        return {}
+    player_id = identity.get("id")
+    if player_id:
+        try:
+            hydrated = _request_json(
+                f"{_BASE}/people/{player_id}",
+                params={"hydrate": "currentTeam"},
+            ).get("people", [])
+            if hydrated:
+                identity = {**identity, **hydrated[0]}
+        except Exception:
+            pass
+    primary = identity.get("primaryPosition", {}) or {}
+    current_team = identity.get("currentTeam", {}) or {}
+    return {
+        "name": identity.get("fullName", name),
+        "mlbam_id": identity.get("id"),
+        "age": identity.get("currentAge"),
+        "birth_date": identity.get("birthDate"),
+        "birth_city": identity.get("birthCity"),
+        "birth_state": identity.get("birthStateProvince"),
+        "birth_country": identity.get("birthCountry"),
+        "height": identity.get("height"),
+        "weight": identity.get("weight"),
+        "bats": (identity.get("batSide", {}) or {}).get("description"),
+        "throws": (identity.get("pitchHand", {}) or {}).get("description"),
+        "primary_position": primary.get("abbreviation") or primary.get("name"),
+        "current_team": current_team.get("name"),
+        "mlb_debut": identity.get("mlbDebutDate"),
+        "active": identity.get("active"),
+    }
+
+
+@cached("mlb_player_teams_played")
+def teams_played(name: str, season: int) -> list[str]:
+    identity = resolve_player_identity(name)
+    player_id = identity.get("id")
+    if not player_id:
+        return []
+    teams: list[str] = []
+    for group in ("hitting", "pitching"):
+        try:
+            data = _request_json(
+                f"{_BASE}/people/{player_id}/stats",
+                params={"stats": "yearByYear", "group": group, "season": season},
+            )
+        except Exception:
+            continue
+        for stat in data.get("stats", []):
+            for split in stat.get("splits", []):
+                team_name = (split.get("team", {}) or {}).get("name")
+                if team_name and team_name not in teams:
+                    teams.append(team_name)
+    return teams
 
 
 @cached("mlb_player_game_logs")

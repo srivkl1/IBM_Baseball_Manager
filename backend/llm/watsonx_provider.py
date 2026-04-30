@@ -26,16 +26,22 @@ class WatsonxLLM(LLM):
 
     def generate(self, prompt: str, system: Optional[str] = None, max_tokens: int = 512,
                  temperature: float = 0.2) -> str:
-        full = f"<<SYS>>\n{system}\n<</SYS>>\n\n{prompt}" if system else prompt
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
         params = {
-            "max_new_tokens": max_tokens,
+            "max_tokens": max_tokens,
             "temperature": temperature,
-            "decoding_method": "greedy" if temperature == 0 else "sample",
         }
         try:
-            resp = self._model.generate_text(prompt=full, params=params)
+            resp = self._model.chat(messages=messages, params=params)
         except Exception as exc:  # network / auth / quota issues
             return f"[watsonx error: {exc}]"
         if isinstance(resp, dict):
+            choices = resp.get("choices", [])
+            if choices:
+                message = choices[0].get("message", {})
+                return str(message.get("content", ""))
             return resp.get("results", [{}])[0].get("generated_text", "")
         return str(resp)

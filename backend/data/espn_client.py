@@ -236,3 +236,41 @@ def load_free_agent_players(size: int = 100) -> List[FantasyPlayer]:
         return [_to_fantasy_player(player) for player in lg.free_agents(size=size)]
     except Exception:
         return []
+
+
+def player_news(name: str, limit: int = 3) -> List[dict]:
+    if not (_HAVE_ESPN and CONFIG.espn_league_id):
+        return []
+    try:
+        lg = load_native_league()
+        if lg is None:
+            return []
+        player_id = getattr(lg, "player_map", {}).get(name)
+        if not player_id:
+            lowered = name.strip().casefold()
+            for key, value in getattr(lg, "player_map", {}).items():
+                if isinstance(key, str) and key.strip().casefold() == lowered:
+                    player_id = value
+                    break
+        if not player_id:
+            return []
+        raw = lg.espn_request.get_player_news(int(player_id))
+    except Exception:
+        return []
+
+    items = raw if isinstance(raw, list) else raw.get("feed", raw.get("articles", [])) if isinstance(raw, dict) else []
+    rows = []
+    for item in items[:limit]:
+        headline = item.get("headline") or item.get("title") or item.get("description", "")
+        summary = item.get("description") or item.get("story") or item.get("summary", "")
+        link = ""
+        links = item.get("links") or {}
+        if isinstance(links, dict):
+            link = (links.get("web") or {}).get("href", "") if isinstance(links.get("web"), dict) else ""
+        rows.append({
+            "headline": headline,
+            "summary": summary,
+            "published": item.get("published") or item.get("lastModified") or "",
+            "link": link,
+        })
+    return rows

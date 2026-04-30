@@ -13,6 +13,14 @@ from backend.draft.player_pool import build_pool
 
 
 CORE_POSITIONS = {"C", "1B", "2B", "3B", "SS", "OF", "SP", "RP", "UTIL", "DH"}
+ESTIMATED_GAMES_ELAPSED = 30
+
+
+def _il_label(value: str) -> str:
+    text = str(value or "").strip()
+    if text.upper().startswith("DL"):
+        return "IL" + text[2:]
+    return text
 
 
 def _norm_name(name: str) -> str:
@@ -44,6 +52,8 @@ def _espn_rows(players: Iterable[espn_client.FantasyPlayer], periods: int) -> pd
             "position": display_position or "/".join(positions),
             "lineup_slot": player.lineup_slot,
             "eligible": ", ".join(positions),
+            "injury_status": _il_label(player.injury_status),
+            "status": _il_label(player.status),
             "espn_total_points": round(float(player.total_points or 0.0), 1),
             "espn_avg_points": round(float(avg_points or 0.0), 2),
             "games_played": round(float(player.games_played or 0.0), 0),
@@ -52,6 +62,33 @@ def _espn_rows(players: Iterable[espn_client.FantasyPlayer], periods: int) -> pd
             "positions_key": "|".join(sorted(_position_set(player))),
         })
     return pd.DataFrame(rows)
+
+
+def add_il_impact(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    out = df.copy()
+    if "injury_status" in out:
+        out["injury_status"] = out["injury_status"].apply(_il_label)
+    if "status" in out:
+        out["status"] = out["status"].apply(_il_label)
+    lineup = out.get("lineup_slot", pd.Series("", index=out.index)).fillna("").astype(str).str.upper()
+    injury = out.get("injury_status", pd.Series("", index=out.index)).fillna("").astype(str)
+    status = out.get("status", pd.Series("", index=out.index)).fillna("").astype(str)
+    out["is_il"] = (lineup == "IL") | injury.str.len().gt(0) | status.str.upper().isin({"IL", "IL10", "IL15", "IL60", "D60"})
+
+    games_played = out.get("games_played", pd.Series(0.0, index=out.index)).fillna(0).astype(float)
+    avg_points = out.get("espn_avg_points", pd.Series(0.0, index=out.index)).fillna(0).astype(float)
+    projected = out.get("proj_pts", pd.Series(0.0, index=out.index)).fillna(0).astype(float)
+
+    out["estimated_games_missed"] = 0.0
+    out.loc[out["is_il"], "estimated_games_missed"] = (
+        ESTIMATED_GAMES_ELAPSED - games_played
+    ).clip(lower=0)
+    replacement_rate = projected / max(ESTIMATED_GAMES_ELAPSED, 1)
+    value_rate = avg_points.where(avg_points > 0, replacement_rate)
+    out["estimated_value_lost"] = (out["estimated_games_missed"] * value_rate).round(1)
+    return out
 
 
 def _mlb_player_id(name: str) -> int:
@@ -167,7 +204,7 @@ def build_team_advice(team: espn_client.FantasyTeam, league: espn_client.LeagueS
                       free_agent_size: int = 100) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     periods = max(int(league.current_scoring_period or league.current_matchup_period or 1), 1)
     pool = _advanced_pool(league.scoring_profile)
-    roster_df = _merge_player_context(_espn_rows(team.roster, periods), pool)
+    roster_df = add_il_impact(_merge_player_context(_espn_rows(team.roster, periods), pool))
     league_rosters_df = _merge_player_context(
         _espn_rows(
             [
@@ -189,7 +226,7 @@ def build_team_advice(team: espn_client.FantasyTeam, league: espn_client.LeagueS
 
     detailed_fas = espn_client.load_free_agent_players(size=free_agent_size)
     if detailed_fas:
-        fa_df = _merge_player_context(_espn_rows(detailed_fas, periods), pool)
+        fa_df = add_il_impact(_merge_player_context(_espn_rows(detailed_fas, periods), pool))
     else:
         fa_df = pool[~pool["Name"].map(_norm_name).isin(rostered_names)].copy()
         fa_df["mlb_team"] = fa_df.get("Team", "")

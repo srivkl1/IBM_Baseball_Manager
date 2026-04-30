@@ -21,7 +21,7 @@ def _roster_view(roster: pd.DataFrame) -> pd.DataFrame:
     roster = add_roster_layout(roster)
     columns = [
         "Roster area", "Slot", "photo", "Name", "position", "espn_avg_points", "league_percentile",
-        "trade_value", "health", "advanced",
+        "estimated_value_lost", "health", "trade_value", "advanced",
     ]
     labels = {
         "photo": "Photo",
@@ -29,6 +29,7 @@ def _roster_view(roster: pd.DataFrame) -> pd.DataFrame:
         "position": "Pos",
         "espn_avg_points": "ESPN avg",
         "league_percentile": "League pct",
+        "estimated_value_lost": "Value lost",
         "trade_value": "Trade value",
         "health": "Status",
         "advanced": "Advanced stats",
@@ -58,6 +59,7 @@ def _legend():
         """
         - **Trade value**: `Model proj + ESPN avg * 8 + WAR * 3`.
         - **League pct**: Player percentile versus compatible-position players in the league.
+        - **Value lost**: Estimated fantasy value lost to IL/injury missed games.
         - **Your benefit / Target benefit**: Need-weighted score for how much the incoming player helps each roster.
         - **Value gap %**: Difference between the two players' trade values; lower is fairer.
         - **Fairness**: Higher means the trade value and benefit are more balanced.

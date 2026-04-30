@@ -35,7 +35,8 @@ def _display_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
     roster_df = add_roster_layout(roster_df)
     cols = [
         "Roster area", "Slot", "photo", "Name", "position", "mlb_team", "espn_avg_points", "games_played", "espn_total_points",
-        "espn_projected_points", "rostership", "league_percentile", "proj_pts", "advanced", "health",
+        "espn_projected_points", "rostership", "league_percentile", "estimated_games_missed",
+        "estimated_value_lost", "health", "proj_pts", "advanced",
     ]
     labels = {
         "photo": "Photo",
@@ -48,6 +49,8 @@ def _display_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
         "espn_projected_points": "ESPN proj",
         "rostership": "Rostered %",
         "league_percentile": "League pct",
+        "estimated_games_missed": "Est missed",
+        "estimated_value_lost": "Value lost",
         "proj_pts": "Model proj",
         "advanced": "Advanced stats",
         "health": "Status",
@@ -59,7 +62,7 @@ def _display_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
 def _display_free_agents(fa_df: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "photo", "Name", "position", "mlb_team", "espn_avg_points", "espn_projected_points",
-        "rostership", "proj_pts", "advanced", "add_score",
+        "rostership", "proj_pts", "add_score", "advanced",
     ]
     labels = {
         "photo": "Photo",
@@ -118,6 +121,8 @@ def _stat_legend():
         - **ESPN proj**: ESPN projected season fantasy points when ESPN provides it.
         - **Rostered %**: ESPN percentage of leagues where the player is rostered.
         - **League pct**: Player percentile versus compatible-position players across the league and free-agent pool.
+        - **Est missed**: Estimated missed games for IL/injured players based on season games elapsed minus ESPN games played.
+        - **Value lost**: Estimated fantasy value lost from missed games, using ESPN avg when available or model projection per game.
         - **Model proj**: App projection from recent fantasy scoring and advanced baseball stats.
         - **Advanced stats**: FanGraphs-style context such as wRC+, wOBA, ISO, FIP, xFIP, K%, BB%, and WAR.
         - **Status**: Stable is 50th percentile or better, Watch is 25th-50th percentile, Struggling is below 25th percentile.
@@ -164,6 +169,7 @@ def render():
     struggling_count = int((roster_df.get("health") == "Struggling").sum()) if "health" in roster_df else 0
     watch_count = int((roster_df.get("health") == "Watch").sum()) if "health" in roster_df else 0
     avg_points = float(roster_df["espn_avg_points"].mean()) if "espn_avg_points" in roster_df else 0.0
+    il_df = roster_df[roster_df.get("is_il", False) == True].copy() if "is_il" in roster_df else pd.DataFrame()
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -191,6 +197,34 @@ def render():
         st.success("No clear free-agent upgrade beat the current roster filters.")
     else:
         st.dataframe(suggestions_df, hide_index=True, use_container_width=True)
+
+    st.subheader("IL Impact")
+    if il_df.empty:
+        st.success("No IL or injury-tagged players found for this roster.")
+    else:
+        il_cols = [
+            "Name", "position", "injury_status", "games_played",
+            "estimated_games_missed", "estimated_value_lost", "proj_pts",
+        ]
+        il_labels = {
+            "Name": "Player",
+            "position": "Pos",
+            "injury_status": "Injury",
+            "games_played": "G",
+            "estimated_games_missed": "Est missed",
+            "estimated_value_lost": "Value lost",
+            "proj_pts": "Model proj",
+        }
+        available = [col for col in il_cols if col in il_df.columns]
+        il_view = il_df[available].rename(columns=il_labels)
+        if "Injury" in il_view:
+            il_view["Injury"] = il_view["Injury"].replace({"DL": "IL", "D10": "IL10", "D15": "IL15", "D60": "IL60"})
+        st.dataframe(
+            il_view,
+            hide_index=True,
+            use_container_width=True,
+        )
+        st.metric("Total estimated IL value lost", f"{il_df['estimated_value_lost'].sum():.1f}")
 
     st.subheader("Best Free Agents In League")
     if fa_df.empty:

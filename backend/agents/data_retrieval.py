@@ -31,6 +31,7 @@ class DataRetrieval:
             "data_source": "pybaseball" if pyb.have_real_data() else "synthetic-fallback",
             "league": league,
             "scoring_profile": league.scoring_profile,
+            "user_text": data_request.get("user_text", ""),
         }
 
         if data_request.get("needs_player_pool", True):

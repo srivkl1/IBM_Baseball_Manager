@@ -8,10 +8,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+import re
 
 import pandas as pd
 
+from backend.config import CONFIG
+from backend.data import espn_client, mlb_stats
 from backend.draft import simulator as sim
+from backend.team_advisor import add_il_impact
 from backend.trade_analyzer import analyze_trades
 
 
@@ -43,6 +47,8 @@ class Analysis:
             return self._analyze_lineup_optimization(bundle)
         if intent == "risk_check":
             return self._analyze_risk_check(bundle)
+        if intent == "player_bio":
+            return self._analyze_player_bio(bundle)
         if intent == "player_trend":
             return self._analyze_trend(bundle)
         if intent == "standings_check":
@@ -191,10 +197,12 @@ class Analysis:
             merged["proj_pts"] = merged.get("recent_pts", merged["espn_pts"])
         merged["proj_pts"] = merged["proj_pts"].fillna(merged.get("recent_pts", merged["espn_pts"]))
         war = merged["WAR"] if "WAR" in merged else pd.Series(0.0, index=merged.index)
+        merged = add_il_impact(merged.rename(columns={"injury": "injury_status"}))
         merged["value"] = (
             merged["proj_pts"].fillna(0).astype(float)
             + merged["espn_avg"].fillna(0).astype(float) * 8.0
             + war.fillna(0).astype(float) * 3.0
+            - merged.get("estimated_value_lost", 0.0).fillna(0).astype(float) * 0.35
         )
         return merged.sort_values("value", ascending=False).reset_index(drop=True)
 
@@ -249,12 +257,15 @@ class Analysis:
             f"Need: {row['position']} has lower roster value; consider waiver or trade upgrades"
             for _, row in weaknesses.iterrows()
         ]
+        il_lost = float(roster.get("estimated_value_lost", pd.Series(dtype=float)).fillna(0).sum())
+        if il_lost:
+            bullets.append(f"IL impact: estimated {il_lost:.1f} fantasy points of value lost to missed games")
         return Recommendation(
             "team_diagnosis",
             f"{team.name} is strongest at {strengths.iloc[0]['position']} and thinnest at {weaknesses.iloc[0]['position']}",
             candidates=cands,
             rationale_bullets=bullets,
-            metrics={"team": team.name, "roster_size": int(len(roster)), "confidence": "medium"},
+            metrics={"team": team.name, "roster_size": int(len(roster)), "il_value_lost": round(il_lost, 1), "confidence": "medium"},
         )
 
     def _analyze_trade_analysis(self, bundle: Dict[str, Any]) -> Recommendation:
@@ -346,6 +357,9 @@ class Analysis:
             if float(row.get("espn_avg", 0) or 0) <= 0 and float(row.get("espn_pts", 0) or 0) <= 0:
                 score += 20
                 reasons.append("no ESPN production yet")
+            if float(row.get("estimated_value_lost", 0) or 0) > 0:
+                score += min(30, int(float(row.get("estimated_value_lost", 0)) / 5))
+                reasons.append(f"estimated {row.get('estimated_value_lost', 0):.1f} value lost")
             median_projection = roster["proj_pts"].median()
             median_projection = 0.0 if pd.isna(median_projection) else float(median_projection)
             if float(row.get("proj_pts", 0) or 0) < median_projection:
@@ -414,7 +428,13 @@ class Analysis:
         )
 
     def _analyze_trend(self, bundle: Dict[str, Any]) -> Recommendation:
+        query_name = self._extract_player_query(bundle.get("user_text", ""))
         recent_bat = bundle.get("recent_batting")
+        recent_pitch = bundle.get("recent_pitching")
+        if query_name:
+            player_rec = self._analyze_named_player(query_name, recent_bat, recent_pitch, bundle)
+            if player_rec is not None:
+                return player_rec
         if recent_bat is None or len(recent_bat) == 0:
             return Recommendation(intent="player_trend",
                                   headline="No recent data available.")
@@ -429,6 +449,182 @@ class Analysis:
             rationale_bullets=[f"{c['name']}: wRC+ {c['wRC+']} with {c['HR']} HR "
                                f"and a .{int(c['AVG']*1000):03d} AVG"
                                for c in cands[:3]],
+        )
+
+    def _analyze_player_bio(self, bundle: Dict[str, Any]) -> Recommendation:
+        query_name = self._extract_player_query(bundle.get("user_text", ""))
+        if not query_name:
+            return Recommendation(
+                intent="player_bio",
+                headline="Which player should I look up?",
+                rationale_bullets=["Ask something like: Who is Shohei Ohtani?"],
+            )
+
+        bio = mlb_stats.player_bio(query_name)
+        if not bio:
+            return Recommendation(
+                intent="player_bio",
+                headline=f"I could not find a bio for {query_name}.",
+                rationale_bullets=["Try the player's full MLB name."],
+            )
+
+        recent_bat = bundle.get("recent_batting")
+        recent_pitch = bundle.get("recent_pitching")
+        trend_rec = self._analyze_named_player(bio.get("name", query_name), recent_bat, recent_pitch, bundle)
+        stats = trend_rec.candidates if trend_rec else []
+        teams = mlb_stats.teams_played(bio.get("name", query_name), CONFIG.oot_season)
+        news = espn_client.player_news(bio.get("name", query_name), limit=3)
+
+        birthplace = ", ".join(
+            part for part in (bio.get("birth_city"), bio.get("birth_state"), bio.get("birth_country")) if part
+        )
+        if bio.get("primary_position") == "TWP":
+            bio["primary_position"] = "two-way player"
+        candidate = {
+            **bio,
+            "birthplace": birthplace,
+            "teams_played_recent": teams,
+            "recent_stats": stats,
+            "news": news,
+        }
+        bullets = [
+            f"{bio.get('name')} is a {bio.get('primary_position', 'baseball player')} for {bio.get('current_team') or 'an MLB organization'}.",
+        ]
+        age = bio.get("age")
+        if age or birthplace:
+            bullets.append(f"Bio: age {age or 'unknown'}, from {birthplace or 'unknown birthplace'}.")
+        if bio.get("bats") or bio.get("throws"):
+            bullets.append(f"Bats {bio.get('bats') or 'unknown'} and throws {bio.get('throws') or 'unknown'}.")
+        if bio.get("mlb_debut"):
+            bullets.append(f"MLB debut: {bio.get('mlb_debut')}.")
+        if teams:
+            bullets.append(f"Recent team data includes: {', '.join(teams[:5])}.")
+        if stats:
+            for row in stats[:2]:
+                if row.get("role") == "Batter":
+                    bullets.append(f"Current batting context: wRC+ {row.get('wRC+')}, {row.get('HR')} HR, WAR {row.get('WAR')}.")
+                elif row.get("role") == "Pitcher":
+                    bullets.append(f"Current pitching context: FIP {row.get('FIP')}, xFIP {row.get('xFIP')}, WAR {row.get('WAR')}.")
+        for item in news[:3]:
+            if item.get("headline"):
+                bullets.append(f"Recent news: {item['headline']}")
+
+        return Recommendation(
+            intent="player_bio",
+            headline=f"{bio.get('name')} bio and fantasy context",
+            candidates=[candidate],
+            rationale_bullets=bullets,
+            metrics={"matched_query": query_name, "news_items": len(news), "source": "MLB Stats API + ESPN news"},
+        )
+
+    @staticmethod
+    def _extract_player_query(text: str) -> str:
+        cleaned = re.sub(r"[?!.]", "", text or "").strip()
+        patterns = [
+            r"who is\s+(.+)$",
+            r"tell me about\s+(.+)$",
+            r"how is\s+(.+)$",
+            r"what about\s+(.+)$",
+            r"(.+?)\s+(?:trend|hot|cold|slump|streak)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                return re.sub(r"^(the player|player)\s+", "", name, flags=re.IGNORECASE)
+        tokens = cleaned.split()
+        if 2 <= len(tokens) <= 4 and not cleaned.lower().startswith(("scan ", "show ", "find ")):
+            return cleaned
+        return ""
+
+    @staticmethod
+    def _name_match(df: Optional[pd.DataFrame], query_name: str) -> pd.DataFrame:
+        if df is None or df.empty or "Name" not in df:
+            return pd.DataFrame()
+        query = query_name.strip().casefold()
+        names = df["Name"].astype(str).str.strip().str.casefold()
+        exact = df[names == query]
+        if not exact.empty:
+            return exact
+        parts = [part for part in query.split() if len(part) > 1]
+        if not parts:
+            return pd.DataFrame()
+        mask = names.apply(lambda name: all(part in name for part in parts))
+        return df[mask]
+
+    def _analyze_named_player(self, query_name: str, recent_bat: Optional[pd.DataFrame],
+                              recent_pitch: Optional[pd.DataFrame],
+                              bundle: Dict[str, Any]) -> Optional[Recommendation]:
+        bat_match = self._name_match(recent_bat, query_name)
+        pitch_match = self._name_match(recent_pitch, query_name)
+        rows = []
+        if not bat_match.empty:
+            r = bat_match.iloc[0]
+            rows.append({
+                "name": r["Name"],
+                "role": "Batter",
+                "team": r.get("Team", ""),
+                "wRC+": round(float(r.get("wRC+", 0) or 0), 0),
+                "HR": int(r.get("HR", 0) or 0),
+                "AVG": round(float(r.get("AVG", 0) or 0), 3),
+                "WAR": round(float(r.get("WAR", 0) or 0), 1),
+            })
+        if not pitch_match.empty:
+            r = pitch_match.iloc[0]
+            rows.append({
+                "name": r["Name"],
+                "role": "Pitcher",
+                "team": r.get("Team", ""),
+                "FIP": round(float(r.get("FIP", 0) or 0), 2),
+                "xFIP": round(float(r.get("xFIP", 0) or 0), 2),
+                "K%": round(float(r.get("K%", 0) or 0), 1),
+                "WAR": round(float(r.get("WAR", 0) or 0), 1),
+            })
+        if not rows:
+            return None
+
+        league = bundle.get("league")
+        fantasy_line = None
+        if league is not None:
+            query = rows[0]["name"].strip().casefold()
+            for team in league.teams:
+                for player in team.roster:
+                    if player.name.strip().casefold() == query:
+                        fantasy_line = {
+                            "fantasy_team": team.name,
+                            "position": player.fantasy_position,
+                            "espn_points": round(float(player.total_points), 1),
+                            "espn_avg": round(float(player.avg_points), 2),
+                            "rostership": round(float(player.rostership), 1),
+                        }
+                        break
+                if fantasy_line:
+                    break
+        candidates = rows.copy()
+        if fantasy_line:
+            candidates[0].update(fantasy_line)
+
+        bullets = []
+        for row in rows:
+            if row["role"] == "Batter":
+                bullets.append(
+                    f"{row['name']} is a batter: wRC+ {row['wRC+']}, {row['HR']} HR, AVG {row['AVG']:.3f}, WAR {row['WAR']}"
+                )
+            else:
+                bullets.append(
+                    f"{row['name']} is a pitcher: FIP {row['FIP']}, xFIP {row['xFIP']}, K% {row['K%']}, WAR {row['WAR']}"
+                )
+        if fantasy_line:
+            bullets.append(
+                f"Fantasy context: {fantasy_line['espn_points']} ESPN pts, {fantasy_line['espn_avg']} avg, rostered by {fantasy_line['fantasy_team']}"
+            )
+
+        return Recommendation(
+            intent="player_trend",
+            headline=f"{rows[0]['name']} player profile",
+            candidates=candidates,
+            rationale_bullets=bullets,
+            metrics={"matched_query": query_name, "roles_found": [row["role"] for row in rows]},
         )
 
     def _analyze_standings(self, bundle: Dict[str, Any]) -> Recommendation:
