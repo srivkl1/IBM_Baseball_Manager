@@ -27,7 +27,7 @@ def render():
         placeholder="e.g., 'Who should I pick next?' or 'Is Elly De La Cruz trending up?'",
     )
     if st.button("Ask the squad") and user_text.strip():
-        with st.spinner("Agents working the count…"):
+        with st.spinner("Werbley is thinking…"):
             resp = ensure_pipeline().run(
                 user_text=user_text, skill_level=skill,
                 draft_state=st.session_state.get("draft_state"),
