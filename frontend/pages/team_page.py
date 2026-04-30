@@ -136,6 +136,11 @@ def render():
     )
 
     league = espn_client.load_league()
+    if league.source != "espn":
+        st.warning(
+            "ESPN league data is not connected, so this page is using demo mode. "
+            f"Reason: {league.error or 'missing ESPN credentials'}"
+        )
     if not league.teams:
         st.warning("No ESPN teams are loaded yet. Add your ESPN league settings in `.env` and restart the app.")
         return

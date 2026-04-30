@@ -77,6 +77,7 @@ class LeagueSnapshot:
     draft_picks: List[FantasyDraftPick] = field(default_factory=list)
     current_matchup_period: int = 0
     current_scoring_period: int = 0
+    error: str = ""
 
 
 def _to_fantasy_player(player) -> FantasyPlayer:
@@ -136,7 +137,7 @@ def _to_fantasy_player(player) -> FantasyPlayer:
     )
 
 
-def _demo_snapshot() -> LeagueSnapshot:
+def _demo_snapshot(error: str = "") -> LeagueSnapshot:
     teams = [
         FantasyTeam(i + 1, n, o)
         for i, (n, o) in enumerate([
@@ -154,6 +155,7 @@ def _demo_snapshot() -> LeagueSnapshot:
         free_agents=[],
         source="demo",
         scoring_profile=default_profile(),
+        error=error,
     )
 
 
@@ -185,11 +187,12 @@ def _draft_picks_for_league(lg) -> List[FantasyDraftPick]:
 
 def load_league() -> LeagueSnapshot:
     if not (_HAVE_ESPN and CONFIG.espn_league_id):
-        return _demo_snapshot()
+        reason = "ESPN package unavailable." if not _HAVE_ESPN else "ESPN_LEAGUE_ID is missing."
+        return _demo_snapshot(reason)
     try:
         lg = load_native_league()
         if lg is None:
-            return _demo_snapshot()
+            return _demo_snapshot("ESPN client returned no league.")
         teams = [
             FantasyTeam(
                 team_id=t.team_id,
@@ -223,8 +226,8 @@ def load_league() -> LeagueSnapshot:
             current_matchup_period=int(getattr(lg, "currentMatchupPeriod", 0) or 0),
             current_scoring_period=int(getattr(lg, "current_week", 0) or 0),
         )
-    except Exception:
-        return _demo_snapshot()
+    except Exception as exc:
+        return _demo_snapshot(str(exc))
 
 
 def load_free_agent_players(size: int = 100) -> List[FantasyPlayer]:

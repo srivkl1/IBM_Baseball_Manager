@@ -75,6 +75,11 @@ def render():
     )
 
     league = espn_client.load_league()
+    if league.source != "espn":
+        st.warning(
+            "ESPN league data is not connected, so trades cannot use your hosted league yet. "
+            f"Reason: {league.error or 'missing ESPN credentials'}"
+        )
     if len(league.teams) < 2:
         st.warning("Need at least two ESPN teams loaded to analyze trades.")
         return

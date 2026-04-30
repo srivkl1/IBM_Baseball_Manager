@@ -99,6 +99,11 @@ def render():
 
     state = st.session_state.get("draft_state")
     league = espn_client.load_league()
+    if league.source != "espn":
+        st.warning(
+            "ESPN league data is not connected, so the tracker is using demo/draft data. "
+            f"Reason: {league.error or 'missing ESPN credentials'}"
+        )
     scoring_profile = league.scoring_profile
 
     _, right = st.columns([4, 1])
