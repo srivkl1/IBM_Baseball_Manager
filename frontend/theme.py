@@ -5,7 +5,7 @@ import streamlit as st
 
 
 PALETTE = {
-    "field_green": "#0B3D2E",   # outfield grass
+    "field_green": "#4CAF50",   # brighter green for buttons
     "dirt_tan": "#C49A6C",      # infield dirt
     "baseline_white": "#F5F5F0",
     "home_red": "#B0282C",      # MLB red
@@ -62,17 +62,20 @@ CSS = f"""
     color: {PALETTE['baseline_white']};
   }}
 
-  /* --- Buttons: red with white text everywhere --- */
-  .stButton>button {{
+  /* --- Buttons: red with navy text for better contrast --- */
+  .stButton>button,
+  .stForm button {{
     background: {PALETTE['home_red']} !important;
-    color: {PALETTE['baseline_white']} !important;
-    border: 2px solid {PALETTE['leather_brown']};
+    color: {PALETTE['away_navy']} !important;
+    border: 2px solid {PALETTE['away_navy']};
     border-radius: 999px;
     font-weight: 600;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.12);
   }}
-  .stButton>button:hover {{
-    background: {PALETTE['field_green']} !important;
-    border-color: {PALETTE['home_red']};
+  .stButton>button:hover,
+  .stForm button:hover {{
+    background: #ce2a34 !important;
+    border-color: {PALETTE['away_navy']};
   }}
 
   /* --- Metric cards --- */

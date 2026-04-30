@@ -37,10 +37,14 @@ def agent_trace(resp: AgentResponse):
 
 
 def recommendation_card(resp: AgentResponse):
+    confidence = f"{round(resp.plan.confidence, 2):.2f}"
     st.markdown(
         f"<div class='wb-card'>"
-        f"<div><span class='wb-badge'>{resp.plan.intent}</span>"
-        f"<span class='wb-badge'>{resp.trace.get('provider')} LLM</span></div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:8px;align-items:center;'>"
+        f"<span class='wb-badge'>{resp.plan.intent}</span>"
+        f"<span class='wb-badge'>{resp.trace.get('provider')} LLM</span>"
+        f"<span class='wb-badge'>confidence: {confidence}</span>"
+        f"</div>"
         f"<h3 style='margin-top:8px;color:{PALETTE['field_green']};'>"
         f"{resp.recommendation.headline}</h3>"
         f"<div>{resp.explanation}</div>"

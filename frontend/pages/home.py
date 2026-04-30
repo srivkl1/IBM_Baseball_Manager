@@ -20,18 +20,42 @@ def render():
             st.session_state["draft_state"] = imported_state
             st.session_state["draft_bundle"] = bundle
 
+    st.session_state.setdefault("home_last_user_text", "")
+    st.session_state.setdefault("home_last_response", None)
+
     skill = st.radio("Skill level", ["beginner", "expert"], horizontal=True)
 
-    user_text = st.text_input(
-        "What do you want advice on?",
-        placeholder="e.g., 'Who should I pick next?' or 'Is Elly De La Cruz trending up?'",
-    )
-    if st.button("Ask the squad") and user_text.strip():
+    # Quick-launch buttons
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Who should I pick next?"):
+            st.session_state["home_user_text"] = "Who should I pick next?"
+    with col2:
+        if st.button("Should I trade X for Y?"):
+            st.session_state["home_user_text"] = "Should I trade X for Y?"
+    with col3:
+        if st.button("Is [player] trending up?"):
+            st.session_state["home_user_text"] = "Is [player] trending up?"
+
+    with st.form("home_chat_form"):
+        user_text = st.text_input(
+            "What do you want advice on?",
+            placeholder="e.g., 'Who should I pick next?' or 'Is Elly De La Cruz trending up?'",
+            key="home_user_text",
+        )
+        submit = st.form_submit_button("Ask Werbley")
+
+    if submit and user_text.strip():
         with st.spinner("Werbley is thinking…"):
             resp = ensure_pipeline().run(
                 user_text=user_text, skill_level=skill,
                 draft_state=st.session_state.get("draft_state"),
                 standings_table=st.session_state.get("standings_table"),
             )
-        recommendation_card(resp)
-        agent_trace(resp)
+        st.session_state["home_last_user_text"] = user_text
+        st.session_state["home_last_response"] = resp
+
+    if st.session_state["home_last_response"] is not None:
+        st.markdown(f"**Last question:** {st.session_state['home_last_user_text']}")
+        recommendation_card(st.session_state["home_last_response"])
+        agent_trace(st.session_state["home_last_response"])
