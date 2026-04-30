@@ -34,6 +34,7 @@ def load_existing_league_state() -> Tuple[Optional[sim.DraftState], Optional[dic
             "player": player.name,
             "mlb_team": player.mlb_team,
             "fantasy_position": player.fantasy_position,
+            "lineup_slot": player.lineup_slot,
             "espn_total_points": player.total_points,
             "espn_projected_total_points": player.projected_total_points,
         } for player in team.roster]

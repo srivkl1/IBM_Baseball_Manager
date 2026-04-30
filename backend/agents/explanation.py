@@ -1,4 +1,4 @@
-"""Agent 4 — Explanation.
+"""Agent 4 - Explanation.
 
 Takes the structured Recommendation from Agent 3 and turns it into plain-English
 advice calibrated to the user's skill level. Uses the configured LLM provider
@@ -8,18 +8,20 @@ from __future__ import annotations
 
 from typing import Optional
 
-from backend.llm import LLM, get_llm
 from backend.agents.analysis import Recommendation
+from backend.llm import LLM, get_llm
 
 
 SYSTEM_TEMPLATES = {
     "beginner": (
         "You are a friendly fantasy-baseball coach. Explain recommendations using "
-        "plain language. Avoid jargon. Explain WHY briefly. Use 4 short sentences max."
+        "plain language. Avoid jargon. Use this structure when possible: "
+        "Recommendation, Why, Risk, Confidence. Use 4 short sentences max."
     ),
     "expert": (
         "You are a sharp fantasy-baseball analyst. Use advanced stats (wRC+, xFIP, "
-        "Barrel%, projected PA, WAR). Be concise: 4–6 sentences with concrete numbers."
+        "Barrel%, projected PA, WAR). Use this structure when possible: "
+        "Recommendation, Why, Risk, Confidence. Be concise: 4-6 sentences with concrete numbers."
     ),
 }
 
@@ -32,8 +34,14 @@ def _prompt_from_recommendation(rec: Recommendation) -> str:
     lines.append("Rationale bullets:")
     for b in rec.rationale_bullets:
         lines.append(f" - {b}")
+    if rec.metrics:
+        lines.append("")
+        lines.append(f"Metrics: {rec.metrics}")
     lines.append("")
-    lines.append("Please explain this recommendation to the user in plain language.")
+    lines.append(
+        "Please explain this recommendation to the user, including the main reason, "
+        "risk, and confidence when the data supports it."
+    )
     return "\n".join(lines)
 
 

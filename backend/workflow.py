@@ -15,6 +15,7 @@ from backend.agents.analysis import Analysis, Recommendation
 from backend.agents.explanation import Explanation
 from backend.draft import simulator as sim
 from backend.llm import LLM, get_llm
+from backend.config import CONFIG
 
 
 @dataclass
@@ -45,6 +46,7 @@ def _summarize_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
 class AgentPipeline:
     def __init__(self, llm: Optional[LLM] = None):
         self.llm = llm or get_llm()
+        self.configured_provider = CONFIG.llm_provider
         self.orchestrator = Orchestrator(self.llm)
         self.retrieval = DataRetrieval()
         self.analysis = Analysis()

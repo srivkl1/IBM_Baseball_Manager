@@ -8,8 +8,8 @@ from backend.agents.data_retrieval import DataRetrieval
 from backend.data import espn_client
 from backend.draft import league_state
 from backend.draft import simulator as sim
-from backend.workflow import AgentPipeline
-from frontend.components import agent_trace, recommendation_card
+from frontend.components import agent_trace, ensure_pipeline, recommendation_card
+from frontend.roster_layout import add_roster_layout
 from frontend.theme import PALETTE, page_header
 
 
@@ -79,7 +79,7 @@ def _ensure_draft_state(team_names, human_index, rounds):
     state = sim.new_draft(pool, team_names, human_index=human_index, rounds=rounds)
     st.session_state["draft_state"] = state
     st.session_state["draft_bundle"] = bundle
-    st.session_state["pipeline"] = st.session_state.get("pipeline") or AgentPipeline()
+    ensure_pipeline()
     return state
 
 
@@ -92,7 +92,7 @@ def render():
         if imported_state is not None:
             st.session_state["draft_state"] = imported_state
             st.session_state["draft_bundle"] = bundle
-            st.session_state["pipeline"] = st.session_state.get("pipeline") or AgentPipeline()
+            ensure_pipeline()
 
     with st.sidebar.expander("Draft setup", expanded="draft_state" not in st.session_state):
         default_names = defaults["team_names"] or FALLBACK_TEAM_NAMES[:4]
@@ -145,9 +145,7 @@ def render():
                 f"{on_clock}</span>**", unsafe_allow_html=True,
             )
             if state.human_on_clock():
-                if "pipeline" not in st.session_state:
-                    st.session_state["pipeline"] = AgentPipeline()
-                resp = st.session_state["pipeline"].run(
+                resp = ensure_pipeline().run(
                     user_text=f"Recommend my round {round_num} pick",
                     skill_level=st.session_state.get("skill_level", "beginner"),
                     draft_state=state,
@@ -181,7 +179,8 @@ def render():
             roster_df = pd.DataFrame(state.rosters[my_team]).rename(
                 columns={"fantasy_position": "pos", "mlb_team": "team"}
             )
-            preferred = [col for col in ("player", "pos", "team", "proj_pts") if col in roster_df.columns]
+            roster_df = add_roster_layout(roster_df)
+            preferred = [col for col in ("Roster area", "Slot", "player", "pos", "team", "proj_pts") if col in roster_df.columns]
             st.dataframe(roster_df[preferred], hide_index=True, use_container_width=True)
         else:
             st.caption("No picks yet.")
@@ -193,7 +192,8 @@ def render():
                     roster_df = pd.DataFrame(roster).rename(
                         columns={"fantasy_position": "pos", "mlb_team": "team"}
                     )
-                    preferred = [col for col in ("player", "pos", "team", "proj_pts") if col in roster_df.columns]
+                    roster_df = add_roster_layout(roster_df)
+                    preferred = [col for col in ("Roster area", "Slot", "player", "pos", "team", "proj_pts") if col in roster_df.columns]
                     st.dataframe(roster_df[preferred], hide_index=True,
                                  use_container_width=True)
                 else:

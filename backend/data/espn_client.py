@@ -28,11 +28,18 @@ def normalize_fantasy_position(position: str) -> str:
 @dataclass
 class FantasyPlayer:
     name: str
+    player_id: int = 0
     mlb_team: str = ""
     fantasy_position: str = ""
+    lineup_slot: str = ""
     eligible_positions: List[str] = field(default_factory=list)
+    injury_status: str = ""
+    status: str = ""
     total_points: float = 0.0
+    avg_points: float = 0.0
+    games_played: float = 0.0
     projected_total_points: float = 0.0
+    rostership: float = 0.0
 
 
 @dataclass
@@ -72,7 +79,8 @@ class LeagueSnapshot:
 
 def _to_fantasy_player(player) -> FantasyPlayer:
     eligible = [normalize_fantasy_position(pos) for pos in getattr(player, "eligibleSlots", [])]
-    fantasy_position = normalize_fantasy_position(getattr(player, "lineupSlot", "") or getattr(player, "position", ""))
+    lineup_slot = normalize_fantasy_position(getattr(player, "lineupSlot", ""))
+    fantasy_position = normalize_fantasy_position(lineup_slot or getattr(player, "position", ""))
     if fantasy_position == "BE" and eligible:
         fantasy_position = eligible[0]
     if fantasy_position == "P":
@@ -80,13 +88,49 @@ def _to_fantasy_player(player) -> FantasyPlayer:
             fantasy_position = "RP"
         else:
             fantasy_position = "SP"
+
+    def _first_float(*attrs: str) -> float:
+        for attr in attrs:
+            try:
+                value = getattr(player, attr, None)
+                if value not in (None, ""):
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    season_stats = getattr(player, "stats", {}).get(0, {}) if getattr(player, "stats", None) else {}
+    breakdown = season_stats.get("breakdown", {}) if isinstance(season_stats, dict) else {}
+    games_played = _first_float("games_played", "gamesPlayed")
+    if not games_played:
+        try:
+            games_played = float(
+                breakdown.get("G", 0.0)
+                or breakdown.get("GP", 0.0)
+                or breakdown.get("GS", 0.0)
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            games_played = 0.0
+    total_points = float(getattr(player, "total_points", 0.0) or 0.0)
+    avg_points = _first_float("avg_points", "average_points", "averagePoints", "appliedAverage")
+    if not avg_points and games_played:
+        avg_points = total_points / games_played
+
     return FantasyPlayer(
         name=getattr(player, "name", ""),
+        player_id=int(getattr(player, "playerId", 0) or 0),
         mlb_team=getattr(player, "proTeam", ""),
         fantasy_position=fantasy_position,
+        lineup_slot=lineup_slot,
         eligible_positions=eligible,
-        total_points=float(getattr(player, "total_points", 0.0) or 0.0),
+        injury_status=str(getattr(player, "injuryStatus", "") or ""),
+        status=str(getattr(player, "status", "") or ""),
+        total_points=total_points,
+        avg_points=avg_points,
+        games_played=games_played,
         projected_total_points=float(getattr(player, "projected_total_points", 0.0) or 0.0),
+        rostership=_first_float("percent_owned", "percentOwned", "percent_owned_by", "ownership"),
     )
 
 
@@ -179,3 +223,16 @@ def load_league() -> LeagueSnapshot:
         )
     except Exception:
         return _demo_snapshot()
+
+
+def load_free_agent_players(size: int = 100) -> List[FantasyPlayer]:
+    """Return detailed ESPN free-agent rows when the native ESPN client is available."""
+    if not (_HAVE_ESPN and CONFIG.espn_league_id):
+        return []
+    try:
+        lg = load_native_league()
+        if lg is None:
+            return []
+        return [_to_fantasy_player(player) for player in lg.free_agents(size=size)]
+    except Exception:
+        return []

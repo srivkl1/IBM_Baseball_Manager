@@ -16,6 +16,11 @@ INTENTS = {
     "draft_pick": "Recommend the next pick in an active fantasy draft.",
     "roster_lookup": "Show the current roster for the user's fantasy team.",
     "roster_move": "Recommend an add/drop, trade, or waiver move.",
+    "waiver_scan": "Scan the league free-agent pool for useful adds.",
+    "team_diagnosis": "Summarize roster strengths, weaknesses, and strategic needs.",
+    "trade_analysis": "Find balanced trade ideas or likely trade partners.",
+    "lineup_optimization": "Suggest starters, bench candidates, and roster slot priorities.",
+    "risk_check": "Identify risky players due to injury, role, production, or playing-time concerns.",
     "player_trend": "Explain recent performance trend for a player.",
     "standings_check": "Report current standings or season progress.",
 }
@@ -38,6 +43,10 @@ class OrchestratorPlan:
 
 def _rule_based_intent(text: str) -> tuple[str, float]:
     t = text.lower()
+    if any(k in t for k in ("risk", "risky", "injury", "injured", "playing time", "role security")):
+        return "risk_check", 0.82
+    if any(k in t for k in ("lineup", "start", "bench", "optimize")):
+        return "lineup_optimization", 0.82
     if any(k in t for k in (
         "who is on my team", "who's on my team", "my roster", "show my team",
         "show my roster", "who do i have", "my lineup", "who is on joseph",
@@ -46,8 +55,14 @@ def _rule_based_intent(text: str) -> tuple[str, float]:
         return "roster_lookup", 0.95
     if any(k in t for k in ("draft", "pick", "round", "on the clock", "bpa")):
         return "draft_pick", 0.85
-    if any(k in t for k in ("trade", "waiver", "add", "drop", "swap")):
+    if any(k in t for k in ("trade", "swap", "offer", "deal")):
+        return "trade_analysis", 0.88
+    if any(k in t for k in ("waiver", "free agent", "free-agent", "available player", "wire")):
+        return "waiver_scan", 0.86
+    if any(k in t for k in ("add", "drop", "replace")):
         return "roster_move", 0.80
+    if any(k in t for k in ("diagnose", "team needs", "weakness", "strength", "where can i improve")):
+        return "team_diagnosis", 0.84
     if any(k in t for k in ("trend", "hot", "cold", "slump", "streak")):
         return "player_trend", 0.75
     if any(k in t for k in (
@@ -84,14 +99,20 @@ class Orchestrator:
         if conf < 0.5:
             clarification = (
                 "I want to make sure I get this right - are you asking about a draft "
-                "pick, your roster, a trade or waiver move, a player's recent trend, "
+                "pick, your roster, a trade, waiver move, risk check, a player's recent trend, "
                 "or your current standings?"
             )
 
         data_request = {
             "intent": intent,
-            "needs_player_pool": intent in ("draft_pick", "roster_move"),
-            "needs_recent_form": intent in ("player_trend", "roster_move"),
+            "needs_player_pool": intent in (
+                "draft_pick", "roster_move", "waiver_scan", "team_diagnosis",
+                "trade_analysis", "lineup_optimization", "risk_check",
+            ),
+            "needs_recent_form": intent in (
+                "player_trend", "roster_move", "waiver_scan", "team_diagnosis",
+                "trade_analysis", "lineup_optimization", "risk_check",
+            ),
             "needs_standings": intent == "standings_check",
             "user_context": req.context,
         }

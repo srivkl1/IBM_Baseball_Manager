@@ -62,6 +62,22 @@ def provider_pill():
     )
 
 
+def ensure_pipeline():
+    from backend.workflow import AgentPipeline
+
+    pipeline = st.session_state.get("pipeline")
+    actual_provider = getattr(getattr(pipeline, "llm", None), "name", None)
+    configured_provider = getattr(pipeline, "configured_provider", None)
+    if (
+        pipeline is None
+        or configured_provider != CONFIG.llm_provider
+        or actual_provider != CONFIG.llm_provider
+    ):
+        pipeline = AgentPipeline()
+        st.session_state["pipeline"] = pipeline
+    return pipeline
+
+
 def _configured_model() -> str:
     if CONFIG.llm_provider == "watsonx":
         return CONFIG.watsonx_model_id
@@ -100,6 +116,8 @@ def llm_status_panel():
                     max_tokens=16,
                     temperature=0,
                 )
+                if str(result).strip().startswith("["):
+                    raise RuntimeError(str(result))
                 st.session_state["llm_test_result"] = {
                     "provider": getattr(llm, "name", CONFIG.llm_provider),
                     "result": result,

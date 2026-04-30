@@ -13,8 +13,7 @@ from backend.draft import league_state
 from backend.draft.scorer import (SEASON_END, SEASON_START, standings,
                                   player_weekly_trajectory)
 from backend.season_tracker import build_espn_season_tracker
-from backend.workflow import AgentPipeline
-from frontend.components import agent_trace, recommendation_card
+from frontend.components import agent_trace, ensure_pipeline, recommendation_card
 from frontend.theme import PALETTE, page_header
 
 
@@ -95,7 +94,7 @@ def render():
         if imported_state is not None:
             st.session_state["draft_state"] = imported_state
             st.session_state["draft_bundle"] = bundle
-            st.session_state["pipeline"] = st.session_state.get("pipeline") or AgentPipeline()
+            ensure_pipeline()
 
     state = st.session_state.get("draft_state")
     league = espn_client.load_league()
@@ -192,23 +191,34 @@ def render():
             y="cumulative_points",
             color="team",
             line_dash="series",
+            line_dash_map={
+                "Actual": "solid",
+                "Current matchup": "solid",
+                "Projected": "dash",
+            },
             markers=True,
             title="Actual plus projected cumulative points by matchup period",
+        )
+        fig_outlook.for_each_trace(
+            lambda trace: trace.update(
+                line=dict(color=PALETTE["home_red"], width=4, dash="solid"),
+                marker=dict(color=PALETTE["home_red"], size=9),
+            )
+            if "Current matchup" in str(trace.name)
+            else None
         )
         fig_outlook.update_layout(
             legend=dict(orientation="h", y=-0.25),
             plot_bgcolor=PALETTE["baseline_white"],
         )
         st.plotly_chart(fig_outlook, use_container_width=True)
-        st.caption("Projected segments extend each team using its average matchup score across the remaining scheduled matchups.")
+        st.caption("Red current-matchup segments bridge completed actual scoring to ESPN's live matchup projection; dashed projected segments extend each team using its average matchup score across the remaining schedule.")
 
     if st.button("Ask the assistant how I'm doing"):
-        pipeline = st.session_state.get("pipeline")
-        if pipeline:
-            resp = pipeline.run(
-                user_text=f"What are my current standings as of {as_of}?",
-                skill_level=st.session_state.get("skill_level", "beginner"),
-                standings_table=table,
-            )
-            recommendation_card(resp)
-            agent_trace(resp)
+        resp = ensure_pipeline().run(
+            user_text=f"What are my current standings as of {as_of}?",
+            skill_level=st.session_state.get("skill_level", "beginner"),
+            standings_table=table,
+        )
+        recommendation_card(resp)
+        agent_trace(resp)

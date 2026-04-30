@@ -4,8 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from backend.draft import league_state
-from backend.workflow import AgentPipeline
-from frontend.components import agent_trace, recommendation_card
+from frontend.components import agent_trace, ensure_pipeline, recommendation_card
 from frontend.theme import page_header
 
 
@@ -13,8 +12,7 @@ def render():
     page_header("Werbley's Squad — Fantasy Baseball Assistant",
                 "Ask for draft picks, trade ideas, player trends, or standings.")
 
-    if "pipeline" not in st.session_state:
-        st.session_state["pipeline"] = AgentPipeline()
+    ensure_pipeline()
 
     if "draft_state" not in st.session_state:
         imported_state, bundle, _ = league_state.load_existing_league_state()
@@ -30,7 +28,7 @@ def render():
     )
     if st.button("Ask the squad") and user_text.strip():
         with st.spinner("Agents working the count…"):
-            resp = st.session_state["pipeline"].run(
+            resp = ensure_pipeline().run(
                 user_text=user_text, skill_level=skill,
                 draft_state=st.session_state.get("draft_state"),
                 standings_table=st.session_state.get("standings_table"),

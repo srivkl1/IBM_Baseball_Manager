@@ -85,6 +85,7 @@ def from_existing_rosters(board: pd.DataFrame, teams: List[str], rosters: dict,
             role = player.get("role", "BAT")
             mlb_team = player.get("mlb_team", "")
             fantasy_position = player.get("fantasy_position", role)
+            lineup_slot = player.get("lineup_slot", fantasy_position)
             proj_pts = float(player.get("proj_pts", 0.0))
             espn_total_points = float(player.get("espn_total_points", 0.0))
             espn_projected_total_points = float(player.get("espn_projected_total_points", 0.0))
@@ -105,6 +106,7 @@ def from_existing_rosters(board: pd.DataFrame, teams: List[str], rosters: dict,
                 "role": role,
                 "mlb_team": mlb_team,
                 "fantasy_position": fantasy_position,
+                "lineup_slot": lineup_slot,
                 "proj_pts": proj_pts,
                 "espn_total_points": espn_total_points,
                 "espn_projected_total_points": espn_projected_total_points,
@@ -119,6 +121,7 @@ def from_existing_rosters(board: pd.DataFrame, teams: List[str], rosters: dict,
                 "role": role,
                 "mlb_team": mlb_team,
                 "fantasy_position": fantasy_position,
+                "lineup_slot": lineup_slot,
                 "proj_pts": proj_pts,
                 "espn_total_points": espn_total_points,
                 "espn_projected_total_points": espn_projected_total_points,

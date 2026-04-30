@@ -113,9 +113,43 @@ def build_espn_season_tracker(as_of: date) -> Tuple[pd.DataFrame, pd.DataFrame, 
         actual_scores = period_points_by_team.get(team_name, [])
         if actual_rows.empty:
             continue
-        cumulative_projection = float(actual_rows.iloc[-1]["cumulative_points"])
         for _, row in actual_rows.iterrows():
             outlook_rows.append(dict(row))
+
+        cumulative_projection = float(actual_rows.iloc[-1]["cumulative_points"])
+        if include_live_period:
+            current_score = current_period_scores.get(team_name, 0.0)
+            current_projected = current_period_projected.get(team_name, current_score)
+            cumulative_before_current = cumulative_projection - current_score
+            current_projected_cumulative = cumulative_before_current + current_projected
+
+            anchor_period = max(target_period - 1, 0)
+            outlook_rows.append({
+                "team": team_name,
+                "period": anchor_period,
+                "date": _display_date_for_period(anchor_period),
+                "period_points": 0.0,
+                "cumulative_points": round(cumulative_before_current, 1),
+                "series": "Current matchup",
+            })
+            outlook_rows.append({
+                "team": team_name,
+                "period": target_period,
+                "date": _display_date_for_period(target_period),
+                "period_points": round(current_projected, 1),
+                "cumulative_points": round(current_projected_cumulative, 1),
+                "series": "Current matchup",
+            })
+            outlook_rows.append({
+                "team": team_name,
+                "period": target_period,
+                "date": _display_date_for_period(target_period),
+                "period_points": round(current_projected, 1),
+                "cumulative_points": round(current_projected_cumulative, 1),
+                "series": "Projected",
+            })
+            cumulative_projection = current_projected_cumulative
+
         average_points = sum(actual_scores) / len(actual_scores) if actual_scores else 0.0
         for period in range(target_period + 1, total_periods + 1):
             cumulative_projection += average_points
