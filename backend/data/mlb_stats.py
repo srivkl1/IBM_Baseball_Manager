@@ -34,6 +34,86 @@ def _split_name(name: str) -> tuple[str, str]:
     return parts[-1], " ".join(parts[:-1])
 
 
+@cached("mlb_teams")
+def mlb_teams(season: int) -> list[dict]:
+    try:
+        data = _request_json(f"{_BASE}/teams", params={"sportId": 1, "season": season})
+    except Exception:
+        return []
+    return data.get("teams", [])
+
+
+def resolve_team(query: str, season: int) -> dict:
+    cleaned = (query or "").strip().lower()
+    cleaned = cleaned.removeprefix("the ").strip()
+    if not cleaned:
+        return {}
+    aliases = {
+        "mets": "new york mets",
+        "yankees": "new york yankees",
+        "red sox": "boston red sox",
+        "white sox": "chicago white sox",
+        "cubs": "chicago cubs",
+        "dodgers": "los angeles dodgers",
+        "angels": "los angeles angels",
+        "diamondbacks": "arizona diamondbacks",
+        "dbacks": "arizona diamondbacks",
+        "d-backs": "arizona diamondbacks",
+        "guards": "cleveland guardians",
+        "jays": "toronto blue jays",
+    }
+    target = aliases.get(cleaned, cleaned)
+    teams = mlb_teams(season)
+    for team in teams:
+        candidates = {
+            str(team.get("name", "")).lower(),
+            str(team.get("teamName", "")).lower(),
+            str(team.get("clubName", "")).lower(),
+            str(team.get("shortName", "")).lower(),
+            str(team.get("abbreviation", "")).lower(),
+            str(team.get("fileCode", "")).lower(),
+        }
+        if target in candidates or any(target == c.replace(".", "") for c in candidates):
+            return team
+    for team in teams:
+        name = str(team.get("name", "")).lower()
+        team_name = str(team.get("teamName", "")).lower()
+        if target in name or target == team_name:
+            return team
+    return {}
+
+
+def team_roster(team_query: str, season: int, roster_type: str = "active") -> dict:
+    team = resolve_team(team_query, season)
+    team_id = team.get("id")
+    if not team_id:
+        return {}
+    try:
+        data = _request_json(
+            f"{_BASE}/teams/{team_id}/roster",
+            params={"rosterType": roster_type, "season": season},
+        )
+    except Exception:
+        return {}
+    players = []
+    for entry in data.get("roster", []):
+        person = entry.get("person", {}) or {}
+        position = entry.get("position", {}) or {}
+        players.append({
+            "name": person.get("fullName", ""),
+            "position": position.get("abbreviation") or position.get("name", ""),
+            "jersey": entry.get("jerseyNumber", ""),
+            "status": entry.get("status", {}).get("description", "") if isinstance(entry.get("status"), dict) else "",
+        })
+    return {
+        "team": team.get("name", team_query),
+        "team_id": team_id,
+        "season": season,
+        "roster_type": roster_type,
+        "players": players,
+    }
+
+
 @cached("mlb_player_identity")
 def resolve_player_identity(name: str) -> dict:
     if _HAVE_PYBASEBALL_IDS:

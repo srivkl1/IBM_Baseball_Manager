@@ -63,13 +63,19 @@ class Explanation:
         if rec.intent == "roster_lookup":
             if not rec.candidates:
                 return rec.headline
-            names = ", ".join(c.get("player", c.get("name", "")) for c in rec.candidates[:12])
-            extra = len(rec.candidates) - 12
+            source = rec.metrics.get("source", "")
+            limit = 20 if source == "MLB Stats API" else 15
+            names = ", ".join(
+                f"{c.get('player', c.get('name', ''))}"
+                + (f" ({c.get('position')})" if c.get("position") else "")
+                for c in rec.candidates[:limit]
+            )
+            extra = len(rec.candidates) - limit
             if extra > 0:
                 names += f", and {extra} more."
             else:
                 names += "."
-            return f"Here is your current roster: {names}"
+            return f"{rec.headline}: {names}"
         sys = SYSTEM_TEMPLATES.get(skill_level, SYSTEM_TEMPLATES["beginner"])
         prompt = _prompt_from_recommendation(rec)
         text = self.llm.generate(prompt, system=sys, max_tokens=300, temperature=0.3)

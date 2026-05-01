@@ -624,6 +624,17 @@ class Analysis:
 
     def _analyze_roster_lookup(self, bundle: Dict[str, Any],
                                draft_state: Optional[sim.DraftState]) -> Recommendation:
+        user_text = str(bundle.get("user_text", ""))
+        fantasy_team_query = self._extract_fantasy_team_query(user_text)
+        mlb_team_query = self._extract_mlb_team_query(user_text)
+        if fantasy_team_query:
+            league = bundle.get("league")
+            rec = self._analyze_fantasy_team_roster(fantasy_team_query, league)
+            if rec is not None:
+                return rec
+        if mlb_team_query:
+            return self._analyze_mlb_team_roster(mlb_team_query)
+
         if draft_state is None:
             return Recommendation(
                 intent="roster_lookup",
@@ -657,6 +668,109 @@ class Analysis:
             candidates=candidates,
             rationale_bullets=bullets,
             metrics={"team": team_name, "roster_size": len(roster)},
+        )
+
+    @staticmethod
+    def _extract_fantasy_team_query(text: str) -> str:
+        cleaned = re.sub(r"[?!.]", "", text or "").strip()
+        patterns = [
+            r"who(?: is|'s)? on\s+(.+?)\s+fantasy team$",
+            r"show(?: me)?\s+(.+?)\s+fantasy team$",
+            r"who(?: is|'s)? on\s+(.+?)'s team$",
+            r"who(?: is|'s)? on\s+(.+?) roster$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _extract_mlb_team_query(text: str) -> str:
+        cleaned = re.sub(r"[?!.]", "", text or "").strip()
+        patterns = [
+            r"who(?: is|'s)? on\s+the\s+(.+)$",
+            r"who(?: is|'s)? on\s+(.+)$",
+            r"who plays for\s+the\s+(.+)$",
+            r"who plays for\s+(.+)$",
+            r"show(?: me)?\s+the\s+(.+?)\s+roster$",
+            r"show(?: me)?\s+(.+?)\s+roster$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, cleaned, flags=re.IGNORECASE)
+            if match:
+                query = match.group(1).strip()
+                if "fantasy" not in query.lower() and not query.lower().startswith(("my team", "my roster")):
+                    return query
+        return ""
+
+    @staticmethod
+    def _matches_team_query(team, query: str) -> bool:
+        q = query.strip().casefold()
+        values = [
+            getattr(team, "name", ""),
+            getattr(team, "owner", ""),
+            f"{getattr(team, 'owner', '')} {getattr(team, 'name', '')}",
+        ]
+        return any(q and q in str(value).casefold() for value in values)
+
+    def _analyze_fantasy_team_roster(self, query: str, league) -> Optional[Recommendation]:
+        if league is None or not getattr(league, "teams", None):
+            return None
+        matches = [team for team in league.teams if self._matches_team_query(team, query)]
+        if not matches:
+            return Recommendation(
+                "roster_lookup",
+                f"I could not find a fantasy team matching '{query}'.",
+                rationale_bullets=[
+                    "Use the exact fantasy team name or owner name from your ESPN league.",
+                ],
+                metrics={"query": query, "league_source": getattr(league, "source", "")},
+            )
+        team = matches[0]
+        cands = [{
+            "player": player.name,
+            "position": player.fantasy_position,
+            "mlb_team": player.mlb_team,
+            "slot": player.lineup_slot,
+            "espn_points": round(float(player.total_points), 1),
+            "espn_avg": round(float(player.avg_points), 2),
+        } for player in getattr(team, "roster", [])]
+        return Recommendation(
+            "roster_lookup",
+            f"{team.name} roster: {len(cands)} players loaded",
+            candidates=cands,
+            rationale_bullets=[
+                f"{c['player']} ({c.get('position', '')}, {c.get('mlb_team', '')})"
+                for c in cands[:12]
+            ],
+            metrics={"team": team.name, "owner": team.owner, "roster_size": len(cands), "source": "ESPN fantasy"},
+        )
+
+    def _analyze_mlb_team_roster(self, query: str) -> Recommendation:
+        roster = mlb_stats.team_roster(query, CONFIG.oot_season)
+        if not roster:
+            return Recommendation(
+                "roster_lookup",
+                f"I could not find an MLB team matching '{query}'.",
+                rationale_bullets=["Try the full team name, city, nickname, or abbreviation."],
+                metrics={"query": query, "source": "MLB Stats API"},
+            )
+        cands = roster.get("players", [])
+        return Recommendation(
+            "roster_lookup",
+            f"{roster.get('team')} active roster: {len(cands)} players",
+            candidates=cands,
+            rationale_bullets=[
+                f"{player.get('name')} ({player.get('position')})"
+                for player in cands[:15]
+            ],
+            metrics={
+                "team": roster.get("team"),
+                "roster_size": len(cands),
+                "season": roster.get("season"),
+                "source": "MLB Stats API",
+            },
         )
 
     def _analyze_trend(self, bundle: Dict[str, Any]) -> Recommendation:

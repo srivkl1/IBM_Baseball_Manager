@@ -46,6 +46,10 @@ class OrchestratorPlan:
 
 def _rule_based_intent(text: str) -> tuple[str, float]:
     t = text.lower()
+    if any(k in t for k in ("who is on ", "who's on ", "who plays for ", "show me ")) and any(
+        k in t for k in (" fantasy team", " roster", " team", "mets", "yankees", "dodgers", "braves", "red sox")
+    ):
+        return "roster_lookup", 0.90
     if answer_basic_question(text):
         return "general_qa", 0.92
     if any(k in t for k in ("top", "best", "rank", "ranking", "list", "good", "elite")) and any(k in t for k in (
