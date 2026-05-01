@@ -168,7 +168,16 @@ def render():
                 st.info(f"Waiting for {on_clock}...")
 
         st.markdown("#### Top 15 still on the board")
-        avail = state.board[state.board["available"]].head(15)
+        avail = state.board[state.board["available"]].head(15).copy()
+        for col, default in (
+            ("Team", ""),
+            ("fantasy_position", ""),
+            ("proj_pts", 0.0),
+            ("rank", ""),
+            ("tier", ""),
+        ):
+            if col not in avail:
+                avail[col] = default
         st.dataframe(
             avail[["Name", "Team", "fantasy_position", "proj_pts", "rank", "tier"]]
             .rename(columns={"Name": "Player", "fantasy_position": "Pos", "proj_pts": "Proj pts",

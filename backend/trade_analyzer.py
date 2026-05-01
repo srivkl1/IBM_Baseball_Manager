@@ -17,6 +17,12 @@ from backend.team_advisor import (
 )
 
 
+def _numeric_col(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column not in frame:
+        return pd.Series(default, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(default).astype(float)
+
+
 def _roster_frame(team: espn_client.FantasyTeam, league: espn_client.LeagueSnapshot,
                   pool: pd.DataFrame) -> pd.DataFrame:
     periods = max(int(league.current_scoring_period or league.current_matchup_period or 1), 1)
@@ -37,10 +43,10 @@ def _roster_frame(team: espn_client.FantasyTeam, league: espn_client.LeagueSnaps
     )
     roster["health"] = roster["league_percentile"].apply(_health_from_percentile)
     roster["trade_value"] = (
-        roster.get("proj_pts", 0.0).fillna(0.0).astype(float)
-        + roster.get("espn_avg_points", 0.0).fillna(0.0).astype(float) * 8.0
-        + roster.get("WAR", 0.0).fillna(0.0).astype(float) * 3.0
-        - roster.get("estimated_value_lost", 0.0).fillna(0.0).astype(float) * 0.35
+        _numeric_col(roster, "proj_pts")
+        + _numeric_col(roster, "espn_avg_points") * 8.0
+        + _numeric_col(roster, "WAR") * 3.0
+        - _numeric_col(roster, "estimated_value_lost") * 0.35
     )
     return roster.sort_values("trade_value", ascending=False).reset_index(drop=True)
 

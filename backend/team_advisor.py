@@ -16,6 +16,12 @@ CORE_POSITIONS = {"C", "1B", "2B", "3B", "SS", "OF", "SP", "RP", "UTIL", "DH"}
 ESTIMATED_GAMES_ELAPSED = 30
 
 
+def _numeric_col(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column not in frame:
+        return pd.Series(default, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(default).astype(float)
+
+
 def _il_label(value: str) -> str:
     text = str(value or "").strip()
     if text.upper().startswith("DL"):
@@ -246,9 +252,9 @@ def build_team_advice(team: espn_client.FantasyTeam, league: espn_client.LeagueS
         return roster_df, fa_df.head(25), pd.DataFrame()
 
     fa_df["add_score"] = (
-        fa_df.get("proj_pts", 0.0).fillna(0.0).astype(float)
-        + fa_df.get("espn_avg_points", 0.0).fillna(0.0).astype(float) * 8.0
-        + fa_df.get("WAR", 0.0).fillna(0.0).astype(float) * 3.0
+        _numeric_col(fa_df, "proj_pts")
+        + _numeric_col(fa_df, "espn_avg_points") * 8.0
+        + _numeric_col(fa_df, "WAR") * 3.0
     )
     fa_df = fa_df.sort_values("add_score", ascending=False).reset_index(drop=True)
     league_population = pd.concat([league_rosters_df, fa_df], ignore_index=True, sort=False)
