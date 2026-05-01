@@ -48,6 +48,7 @@ def _load_streamlit_secrets_into_env():
         "DATA_START_SEASON",
         "TARGET_SEASON",
         "RECENT_HISTORY_WINDOW",
+        "ALLOW_SYNTHETIC_DATA",
     ):
         try:
             set_env(key, secrets.get(key))
@@ -108,6 +109,9 @@ class Config:
     data_start_season: int = int(os.getenv("DATA_START_SEASON", "2000"))
     oot_season: int = int(os.getenv("TARGET_SEASON", "2026"))
     recent_history_window: int = int(os.getenv("RECENT_HISTORY_WINDOW", "3"))
+    allow_synthetic_data: bool = os.getenv("ALLOW_SYNTHETIC_DATA", "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
     allowed_seasons: tuple = ()
     recent_history_seasons: tuple = ()

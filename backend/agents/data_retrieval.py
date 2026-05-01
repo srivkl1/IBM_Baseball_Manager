@@ -26,9 +26,12 @@ from backend.models import draft_optimizer
 class DataRetrieval:
     def fetch(self, data_request: Dict[str, Any]) -> Dict[str, Any]:
         league = espn_client.load_league()
+        data_source = "pybaseball" if pyb.have_real_data() else (
+            "synthetic-demo" if CONFIG.allow_synthetic_data else "real-data-unavailable"
+        )
         bundle: Dict[str, Any] = {
             "seasons_scope": list(CONFIG.allowed_seasons),
-            "data_source": "pybaseball" if pyb.have_real_data() else "synthetic-fallback",
+            "data_source": data_source,
             "league": league,
             "scoring_profile": league.scoring_profile,
             "user_text": data_request.get("user_text", ""),
@@ -36,25 +39,33 @@ class DataRetrieval:
 
         if data_request.get("needs_player_pool", True):
             pool = build_pool(league.scoring_profile)
-            # Fold in ML projections for the OOT season (used for draft).
-            if league.scoring_profile.uses_points:
-                pool["proj_pts"] = 0.65 * pool["recent_pts"] + 0.35 * pool["avg_pts"]
-                pool = pool.sort_values("proj_pts", ascending=False).reset_index(drop=True)
-                pool["proj_rank"] = pool.index + 1
+            if pool.empty:
+                bundle["player_pool"] = pool
+                bundle["prospects"] = pyb.prospects(CONFIG.oot_season)
+                bundle["data_error"] = (
+                    "Real advanced-stat data is unavailable. Synthetic player pools are disabled "
+                    "to avoid showing false teams or projections."
+                )
             else:
-                try:
-                    proj = draft_optimizer.score_players_for_season(CONFIG.oot_season)
-                    pool = pool.merge(
-                        proj[["Name", "role", "proj_pts", "proj_rank"]],
-                        on=["Name", "role"], how="left",
-                    )
-                except Exception as exc:
-                    pool["proj_pts"] = pool["recent_pts"]
-                    pool["proj_rank"] = pool["rank"]
-                    bundle["projection_error"] = str(exc)
-            pool = _add_espn_health_context(pool, league)
-            bundle["player_pool"] = pool
-            bundle["prospects"] = pyb.prospects(CONFIG.oot_season)
+                # Fold in ML projections for the OOT season (used for draft).
+                if league.scoring_profile.uses_points:
+                    pool["proj_pts"] = 0.65 * pool["recent_pts"] + 0.35 * pool["avg_pts"]
+                    pool = pool.sort_values("proj_pts", ascending=False).reset_index(drop=True)
+                    pool["proj_rank"] = pool.index + 1
+                else:
+                    try:
+                        proj = draft_optimizer.score_players_for_season(CONFIG.oot_season)
+                        pool = pool.merge(
+                            proj[["Name", "role", "proj_pts", "proj_rank"]],
+                            on=["Name", "role"], how="left",
+                        )
+                    except Exception as exc:
+                        pool["proj_pts"] = pool["recent_pts"]
+                        pool["proj_rank"] = pool["rank"]
+                        bundle["projection_error"] = str(exc)
+                pool = _add_espn_health_context(pool, league)
+                bundle["player_pool"] = pool
+                bundle["prospects"] = pyb.prospects(CONFIG.oot_season)
 
         if data_request.get("needs_recent_form"):
             most_recent = CONFIG.oot_season

@@ -1,12 +1,13 @@
-"""pybaseball wrappers with graceful offline fallback.
+"""pybaseball wrappers with optional offline demo fallback.
 
 We pull:
   - batting_stats(year): FanGraphs standard + advanced (WAR, wRC+, ISO, wOBA, …)
   - pitching_stats(year): FanGraphs pitching (WAR, FIP, xFIP, K%, BB%, …)
   - prospects: FanGraphs top prospects
 
-If pybaseball isn't installed or network is blocked, we synthesize a
-realistic fallback dataset so the Streamlit demo still runs end-to-end.
+Synthetic data is only returned when ALLOW_SYNTHETIC_DATA is enabled. In normal
+hosted/real mode, missing pybaseball data returns empty frames so fabricated
+teams/projections do not appear as real advice.
 """
 from __future__ import annotations
 
@@ -145,6 +146,8 @@ def batting_stats(season: int) -> pd.DataFrame:
             return _batting_stats_real(season)
         except Exception:
             pass
+    if not CONFIG.allow_synthetic_data:
+        return pd.DataFrame()
     return _synth_batting(season)
 
 
@@ -156,6 +159,8 @@ def pitching_stats(season: int) -> pd.DataFrame:
             return _pitching_stats_real(season)
         except Exception:
             pass
+    if not CONFIG.allow_synthetic_data:
+        return pd.DataFrame()
     return _synth_pitching(season)
 
 
@@ -167,7 +172,9 @@ def prospects(season: int) -> pd.DataFrame:
                 return df
         except Exception:
             pass
-    # Fallback: a few high-profile prospects.
+    if not CONFIG.allow_synthetic_data:
+        return pd.DataFrame()
+    # Demo fallback: a few high-profile prospects.
     return pd.DataFrame({
         "Name": ["Roki Sasaki", "Samuel Basallo", "Walker Jenkins", "Leodalis De Vries",
                  "Kevin McGonigle", "Max Clark", "Travis Bazzana", "Bryce Rainer"],

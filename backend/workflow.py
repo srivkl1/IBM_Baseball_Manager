@@ -40,6 +40,8 @@ def _summarize_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
         summary["league"] = {"source": lg.source, "teams": len(lg.teams),
                              "scoring": lg.scoring_type,
                              "season": lg.season}
+    if bundle.get("data_error"):
+        summary["data_error"] = bundle["data_error"]
     return summary
 
 

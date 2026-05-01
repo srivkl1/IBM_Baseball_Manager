@@ -58,6 +58,8 @@ class Explanation:
             return self._explain_player_bio(rec, skill_level)
         if rec.metrics.get("response_style") == "player_list":
             return self._explain_player_list(rec)
+        if rec.metrics.get("real_data_required"):
+            return " ".join(rec.rationale_bullets) if rec.rationale_bullets else rec.headline
         if rec.intent == "roster_lookup":
             if not rec.candidates:
                 return rec.headline
@@ -81,8 +83,8 @@ class Explanation:
             health = c.get("health", "Active")
             adjusted = c.get("health_adjusted_proj_pts", c.get("proj_pts"))
             raw = c.get("proj_pts")
-            projection_text = f"{adjusted} health-adjusted pts"
-            if raw is not None and adjusted != raw:
+            projection_text = c.get("real_stat_line") or f"{adjusted} health-adjusted pts"
+            if not c.get("real_stat_line") and raw is not None and adjusted != raw:
                 projection_text += f" ({raw} raw)"
             health = f"{health}: {c.get('injury_note')}" if c.get("injury_note") else health
             lines.append(

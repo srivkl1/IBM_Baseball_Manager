@@ -67,6 +67,20 @@ class Analysis:
         return Recommendation(intent=intent, headline="No analysis path for this intent.")
 
     @staticmethod
+    def _missing_real_data_rec(intent: str, bundle: Dict[str, Any]) -> Recommendation:
+        return Recommendation(
+            intent=intent,
+            headline="Real player ranking data is unavailable right now.",
+            rationale_bullets=[
+                bundle.get("data_error")
+                or "The app could not load the real advanced-stat player pool.",
+                "Synthetic fallback rankings are disabled so the app does not show false teams, projections, or draft advice.",
+                "Player-specific questions can still use MLB API data when the player name is provided.",
+            ],
+            metrics={"data_source": bundle.get("data_source"), "real_data_required": True},
+        )
+
+    @staticmethod
     def _available_pool(pool: pd.DataFrame, bundle: Dict[str, Any],
                         draft_state: Optional[sim.DraftState] = None) -> pd.DataFrame:
         if draft_state is not None:
@@ -103,7 +117,10 @@ class Analysis:
         if self._is_player_list_query(user_text):
             return self._analyze_player_list(bundle)
 
-        pool = self._available_pool(bundle["player_pool"], bundle, draft_state)
+        pool = bundle.get("player_pool")
+        if pool is None or pool.empty:
+            return self._missing_real_data_rec("draft_pick", bundle)
+        pool = self._available_pool(pool, bundle, draft_state)
         if draft_state is None:
             top = pool.head(10)
             cands = [{
@@ -201,7 +218,7 @@ class Analysis:
     def _analyze_player_list(self, bundle: Dict[str, Any]) -> Recommendation:
         pool: pd.DataFrame = bundle.get("player_pool")
         if pool is None or pool.empty:
-            return Recommendation("draft_pick", "Need a player pool before ranking players.")
+            return self._missing_real_data_rec("draft_pick", bundle)
 
         user_text = str(bundle.get("user_text", ""))
         positions = self._position_filter_from_text(user_text)
@@ -230,25 +247,34 @@ class Analysis:
             ranked = ranked.sort_values(sort_col, ascending=False)
         elif "rank" in ranked:
             ranked = ranked.sort_values("rank", ascending=True)
+
+        # Always verify list/ranking answers against MLB API before showing
+        # teams/stat lines. This prevents synthetic or stale team abbreviations
+        # from being presented as real context in hosted deployments.
+        ranked = self._rerank_with_mlb_api(ranked.head(30))
         top = ranked.head(10)
         cands = []
         for idx, (_, r) in enumerate(top.iterrows(), start=1):
+            real = r.get("real_context", {}) if isinstance(r.get("real_context", {}), dict) else {}
             cands.append({
                 "rank": idx,
                 "name": r["Name"],
                 "position": r.get("fantasy_position", r.get("role", "")),
-                "team": r.get("Team", ""),
+                "team": real.get("team") or r.get("Team", ""),
                 "proj_pts": round(float(r.get("proj_pts", r.get("draft_score", 0)) or 0), 1),
                 "health_adjusted_proj_pts": round(float(r.get("health_adjusted_proj_pts", r.get("proj_pts", r.get("draft_score", 0))) or 0), 1),
                 "health": r.get("health_status", "Active"),
                 "injury_note": self._injury_note(r),
+                "real_stat_line": real.get("stat_line", ""),
+                "real_score": round(float(r.get("real_data_score", 0.0) or 0.0), 1),
                 "tier": int(r.get("tier", 0) or 0),
                 "three_year_rank": int(r.get("rank", idx) or idx),
             })
         title_scope = "overall" if scope == "overall" else f"at {scope}"
         bullets = [
-            f"{c['rank']}. {c['name']} ({c['position']}, {c['team']}) - health-adjusted {c['health_adjusted_proj_pts']} pts, "
-            f"raw projection {c['proj_pts']}, {c['health']}, tier {c['tier']}"
+            f"{c['rank']}. {c['name']} ({c['position']}, {c['team']}) - "
+            f"{c['real_stat_line'] or str(c['health_adjusted_proj_pts']) + ' health-adjusted pts'}, "
+            f"{c['health']}, tier {c['tier']}"
             for c in cands
         ]
         return Recommendation(
@@ -260,9 +286,84 @@ class Analysis:
                 "response_style": "player_list",
                 "position_scope": scope,
                 "ranked_pool_size": int(len(ranked)),
-                "basis": "health-adjusted model projection, recent form, historical rank, and tier",
+                "basis": (
+                    "MLB API season stats/current team, health status, and health-adjusted projection"
+                ),
+                "data_source_warning": "",
             },
         )
+
+    def _rerank_with_mlb_api(self, ranked: pd.DataFrame) -> pd.DataFrame:
+        rows = []
+        for _, row in ranked.iterrows():
+            row = row.copy()
+            real = self._real_player_context(str(row.get("Name", "")))
+            row["real_context"] = real
+            health_multiplier = _safe_float(row.get("health_multiplier"), 1.0)
+            row["real_data_score"] = real.get("score", 0.0) * health_multiplier
+            if real.get("team"):
+                row["Team"] = real["team"]
+            rows.append(row)
+        out = pd.DataFrame(rows)
+        if "real_data_score" in out:
+            out = out.sort_values(
+                ["real_data_score", "health_adjusted_proj_pts" if "health_adjusted_proj_pts" in out else "proj_pts"],
+                ascending=[False, False],
+            )
+        return out.reset_index(drop=True)
+
+    @staticmethod
+    def _real_player_context(name: str) -> dict:
+        bio = mlb_stats.player_bio(name)
+        summary = mlb_stats.player_season_summary(name, CONFIG.oot_season)
+        team = (
+            (summary.get("hitting", {}) or {}).get("team")
+            or (summary.get("pitching", {}) or {}).get("team")
+            or bio.get("current_team")
+            or ""
+        )
+        hitting = summary.get("hitting") or {}
+        pitching = summary.get("pitching") or {}
+        if hitting:
+            games = _safe_float(hitting.get("games"))
+            ops = _safe_float(hitting.get("ops"))
+            avg = str(hitting.get("avg") or "").lstrip("0")
+            hr = _safe_float(hitting.get("home_runs"))
+            rbi = _safe_float(hitting.get("rbi"))
+            score = games * 0.4 + ops * 220 + hr * 4 + rbi * 1.2
+            if int(summary.get("season") or CONFIG.oot_season) < CONFIG.oot_season:
+                score *= 0.65
+            return {
+                "team": team,
+                "score": score,
+                "stat_line": (
+                    f"MLB {summary.get('season')}: {int(games)} G, {avg or 'N/A'} AVG, "
+                    f"{hitting.get('ops') or 'N/A'} OPS, {int(hr)} HR, {int(rbi)} RBI"
+                ),
+            }
+        if pitching:
+            games = _safe_float(pitching.get("games"))
+            innings = _safe_float(pitching.get("innings"))
+            era = _safe_float(pitching.get("era"), 9.99)
+            whip = _safe_float(pitching.get("whip"), 2.00)
+            strikeouts = _safe_float(pitching.get("strikeouts"))
+            score = innings * 1.2 + strikeouts * 1.5 + max(0, 5.00 - era) * 35 + max(0, 1.50 - whip) * 60
+            if int(summary.get("season") or CONFIG.oot_season) < CONFIG.oot_season:
+                score *= 0.65
+            return {
+                "team": team,
+                "score": score,
+                "stat_line": (
+                    f"MLB {summary.get('season')}: {int(games)} G, {pitching.get('innings') or '0'} IP, "
+                    f"{pitching.get('era') or 'N/A'} ERA, {pitching.get('whip') or 'N/A'} WHIP, "
+                    f"{int(strikeouts)} K"
+                ),
+            }
+        return {
+            "team": team,
+            "score": 0.0,
+            "stat_line": "MLB API: current team verified; no season stat line found",
+        }
 
     @staticmethod
     def _injury_note(row: pd.Series) -> str:
@@ -272,9 +373,8 @@ class Analysis:
 
     def _analyze_roster_move(self, bundle: Dict[str, Any]) -> Recommendation:
         pool: pd.DataFrame = bundle.get("player_pool")
-        if pool is None:
-            return Recommendation(intent="roster_move",
-                                  headline="Need a player pool to evaluate roster moves.")
+        if pool is None or pool.empty:
+            return self._missing_real_data_rec("roster_move", bundle)
         adds = self._available_pool(pool, bundle).head(10)
         cands = [{"name": r["Name"], "role": r["role"], "position": r.get("fantasy_position", r["role"]),
                   "proj_pts": round(float(r.get("proj_pts", 0)), 1),
@@ -334,8 +434,8 @@ class Analysis:
 
     def _analyze_waiver_scan(self, bundle: Dict[str, Any]) -> Recommendation:
         pool: pd.DataFrame = bundle.get("player_pool")
-        if pool is None:
-            return Recommendation("waiver_scan", "Need a player pool before scanning waivers.")
+        if pool is None or pool.empty:
+            return self._missing_real_data_rec("waiver_scan", bundle)
         adds = self._available_pool(pool, bundle).copy().head(12)
         cands = []
         for _, r in adds.iterrows():
@@ -362,6 +462,8 @@ class Analysis:
     def _analyze_team_diagnosis(self, bundle: Dict[str, Any]) -> Recommendation:
         league = bundle.get("league")
         pool: pd.DataFrame = bundle.get("player_pool")
+        if pool is None or pool.empty:
+            return self._missing_real_data_rec("team_diagnosis", bundle)
         team = self._my_team(league)
         roster = self._player_rows(team, pool) if pool is not None else pd.DataFrame()
         if roster.empty:
@@ -433,6 +535,8 @@ class Analysis:
     def _analyze_lineup_optimization(self, bundle: Dict[str, Any]) -> Recommendation:
         league = bundle.get("league")
         pool: pd.DataFrame = bundle.get("player_pool")
+        if pool is None or pool.empty:
+            return self._missing_real_data_rec("lineup_optimization", bundle)
         team = self._my_team(league)
         roster = self._player_rows(team, pool) if pool is not None else pd.DataFrame()
         if roster.empty:
@@ -466,6 +570,8 @@ class Analysis:
     def _analyze_risk_check(self, bundle: Dict[str, Any]) -> Recommendation:
         league = bundle.get("league")
         pool: pd.DataFrame = bundle.get("player_pool")
+        if pool is None or pool.empty:
+            return self._missing_real_data_rec("risk_check", bundle)
         team = self._my_team(league)
         roster = self._player_rows(team, pool) if pool is not None else pd.DataFrame()
         if roster.empty:

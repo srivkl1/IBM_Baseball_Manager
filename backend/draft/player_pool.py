@@ -29,14 +29,22 @@ def build_pool(profile: ScoringProfile | None = None) -> pd.DataFrame:
     frames = []
     for season in CONFIG.recent_history_seasons:
         b = pyb.batting_stats(season).copy()
-        b["role"] = "BAT"
-        b["fantasy_pts"] = b.apply(lambda row: _hitter_points(row, profile), axis=1)
         p = pyb.pitching_stats(season).copy()
-        p["role"] = "PIT"
-        p["fantasy_pts"] = p.apply(lambda row: _pitcher_points(row, profile), axis=1)
-        b["GS"] = 0
-        frames.append(b[["Name", "Team", "Season", "role", "WAR", "fantasy_pts", "G", "GS"]])
-        frames.append(p[["Name", "Team", "Season", "role", "WAR", "fantasy_pts", "G", "GS"]])
+        if not b.empty:
+            b["role"] = "BAT"
+            b["fantasy_pts"] = b.apply(lambda row: _hitter_points(row, profile), axis=1)
+            b["GS"] = 0
+            frames.append(b[["Name", "Team", "Season", "role", "WAR", "fantasy_pts", "G", "GS"]])
+        if not p.empty:
+            p["role"] = "PIT"
+            p["fantasy_pts"] = p.apply(lambda row: _pitcher_points(row, profile), axis=1)
+            frames.append(p[["Name", "Team", "Season", "role", "WAR", "fantasy_pts", "G", "GS"]])
+    if not frames:
+        return pd.DataFrame(columns=[
+            "Name", "role", "Team", "avg_war", "avg_pts", "recent_pts",
+            "recent_war", "recent_games", "recent_starts", "draft_score",
+            "fantasy_position", "rank", "tier",
+        ])
     long = pd.concat(frames, ignore_index=True)
 
     most_recent = long["Season"].max()
