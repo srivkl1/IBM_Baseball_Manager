@@ -11,3 +11,6 @@ joblib>=1.3
 # Streamlit Cloud installs only this file by default. Keep watsonx here so
 # LLM_PROVIDER=watsonx does not fall back to mock in the hosted app.
 ibm-watsonx-ai>=1.1.0
+
+# Needed for hosted users to paste ESPN league credentials in the sidebar.
+espn-api>=0.35.0
