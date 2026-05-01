@@ -34,36 +34,23 @@ def _clear_league_state():
     ):
         st.session_state.pop(key, None)
     try:
-        espn_client.load_native_league.cache_clear()
+        espn_client.clear_runtime_caches()
     except Exception:
         pass
 
 
-def _apply_runtime_espn_config(config: dict):
+def _clean_runtime_espn_config(config: dict) -> dict:
     league_id = str(config.get("league_id", "")).strip()
     season = str(config.get("season", "2026")).strip() or "2026"
     swid = str(config.get("swid", "")).strip()
     s2 = str(config.get("s2", "")).strip()
-
-    os.environ["ESPN_LEAGUE_ID"] = league_id
-    os.environ["ESPN_SEASON"] = season
-    os.environ["ESPN_SWID"] = swid
-    os.environ["ESPN_S2"] = s2
-
-    CONFIG.espn_league_id = league_id
-    CONFIG.espn_season = int(season)
-    CONFIG.espn_swid = swid
-    CONFIG.espn_s2 = s2
-
-
-if "runtime_espn_config" in st.session_state:
-    _apply_runtime_espn_config(st.session_state["runtime_espn_config"])
+    return {"league_id": league_id, "season": season, "swid": swid, "s2": s2}
 
 
 def sidebar_league_connector():
     with st.expander("Connect ESPN league", expanded=False):
         saved = st.session_state.get("runtime_espn_config", {})
-        st.caption("Paste your ESPN fantasy baseball league info for this session.")
+        st.caption("Paste your ESPN fantasy baseball league info for only this browser session.")
         with st.form("runtime_espn_form"):
             league_id = st.text_input(
                 "League ID",
@@ -97,14 +84,13 @@ def sidebar_league_connector():
             except ValueError:
                 st.error("Season must be a year like 2026.")
                 return
-            runtime_config = {
-                "league_id": league_id.strip(),
-                "season": season.strip(),
-                "swid": swid.strip(),
-                "s2": s2.strip(),
-            }
+            runtime_config = _clean_runtime_espn_config({
+                "league_id": league_id,
+                "season": season,
+                "swid": swid,
+                "s2": s2,
+            })
             st.session_state["runtime_espn_config"] = runtime_config
-            _apply_runtime_espn_config(runtime_config)
             _clear_league_state()
             league = espn_client.load_league()
             if league.source == "espn":
@@ -114,14 +100,46 @@ def sidebar_league_connector():
 
         if st.button("Clear pasted league", use_container_width=True):
             st.session_state.pop("runtime_espn_config", None)
-            _apply_runtime_espn_config({
-                "league_id": "",
-                "season": str(CONFIG.espn_season or 2026),
-                "swid": "",
-                "s2": "",
-            })
             _clear_league_state()
             st.rerun()
+
+
+def _team_default_index(teams) -> int:
+    selected_id = st.session_state.get("selected_team_id")
+    if selected_id not in (None, ""):
+        try:
+            selected_id = int(selected_id)
+            for idx, team in enumerate(teams):
+                if int(getattr(team, "team_id", -1)) == selected_id:
+                    return idx
+        except (TypeError, ValueError):
+            pass
+    for idx, team in enumerate(teams):
+        if (team.owner or "").strip().lower() in {"you", "me", "my team"}:
+            return idx
+    return 0
+
+
+def sidebar_team_selector():
+    league = espn_client.load_league()
+    if league.source != "espn" or not league.teams:
+        st.caption("Connect an ESPN league to choose your team.")
+        return
+
+    previous_id = st.session_state.get("selected_team_id")
+    selected = st.selectbox(
+        "Your team",
+        options=league.teams,
+        index=_team_default_index(league.teams),
+        format_func=lambda team: f"{team.name} ({team.owner})",
+        key="sidebar_selected_team",
+    )
+    st.session_state["selected_team_id"] = int(selected.team_id)
+    st.session_state["selected_team_name"] = selected.name
+    st.session_state["selected_team_owner"] = selected.owner
+    if previous_id not in (None, selected.team_id) and str(previous_id) != str(selected.team_id):
+        _clear_league_state()
+        st.rerun()
 
 
 with st.sidebar:
@@ -129,6 +147,7 @@ with st.sidebar:
     st.caption("IBM Experiential AI Lab | 4-agent fantasy baseball optimizer")
     provider_pill()
     sidebar_league_connector()
+    sidebar_team_selector()
     st.divider()
     page = st.radio(
         "Navigate",

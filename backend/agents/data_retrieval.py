@@ -119,6 +119,7 @@ class DataRetrieval:
             "league": league,
             "scoring_profile": league.scoring_profile,
             "user_text": data_request.get("user_text", ""),
+            "user_context": data_request.get("user_context", {}),
         }
 
         if data_request.get("needs_player_pool", True):

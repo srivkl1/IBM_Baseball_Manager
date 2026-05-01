@@ -137,7 +137,32 @@ def _to_fantasy_player(player) -> FantasyPlayer:
     )
 
 
-def _demo_snapshot(error: str = "") -> LeagueSnapshot:
+def _runtime_espn_config() -> dict:
+    """Return ESPN settings scoped to the current Streamlit browser session."""
+    try:
+        import streamlit as st
+        runtime = st.session_state.get("runtime_espn_config", {})
+    except Exception:
+        runtime = {}
+    league_id = str(runtime.get("league_id", CONFIG.espn_league_id) or "").strip()
+    try:
+        season = int(str(runtime.get("season", CONFIG.espn_season) or CONFIG.espn_season).strip())
+    except ValueError:
+        season = CONFIG.espn_season
+    return {
+        "league_id": league_id,
+        "season": season,
+        "swid": str(runtime.get("swid", CONFIG.espn_swid) or "").strip(),
+        "s2": str(runtime.get("s2", CONFIG.espn_s2) or "").strip(),
+    }
+
+
+def runtime_league_cache_key() -> tuple[str, int, bool]:
+    settings = _runtime_espn_config()
+    return (settings["league_id"], settings["season"], bool(settings["swid"] and settings["s2"]))
+
+
+def _demo_snapshot(error: str = "", season: int | None = None) -> LeagueSnapshot:
     teams = [
         FantasyTeam(i + 1, n, o)
         for i, (n, o) in enumerate([
@@ -149,7 +174,7 @@ def _demo_snapshot(error: str = "") -> LeagueSnapshot:
     ]
     return LeagueSnapshot(
         league_id="demo-league",
-        season=CONFIG.espn_season,
+        season=season or CONFIG.espn_season,
         scoring_type="H2H Categories (R/HR/RBI/SB/AVG + W/SV/K/ERA/WHIP)",
         teams=teams,
         free_agents=[],
@@ -159,14 +184,28 @@ def _demo_snapshot(error: str = "") -> LeagueSnapshot:
     )
 
 
-@lru_cache(maxsize=1)
-def load_native_league():
-    if not (_HAVE_ESPN and CONFIG.espn_league_id):
+@lru_cache(maxsize=8)
+def _load_native_league_cached(league_id: str, season: int, swid: str, s2: str):
+    if not (_HAVE_ESPN and league_id):
         return None
-    kwargs = {"league_id": int(CONFIG.espn_league_id), "year": CONFIG.espn_season}
-    if CONFIG.espn_swid and CONFIG.espn_s2:
-        kwargs.update({"espn_s2": CONFIG.espn_s2, "swid": CONFIG.espn_swid})
+    kwargs = {"league_id": int(league_id), "year": season}
+    if swid and s2:
+        kwargs.update({"espn_s2": s2, "swid": swid})
     return League(**kwargs)
+
+
+def load_native_league():
+    settings = _runtime_espn_config()
+    return _load_native_league_cached(
+        settings["league_id"],
+        settings["season"],
+        settings["swid"],
+        settings["s2"],
+    )
+
+
+def clear_runtime_caches():
+    _load_native_league_cached.cache_clear()
 
 
 def _draft_picks_for_league(lg) -> List[FantasyDraftPick]:
@@ -186,13 +225,14 @@ def _draft_picks_for_league(lg) -> List[FantasyDraftPick]:
 
 
 def load_league() -> LeagueSnapshot:
-    if not (_HAVE_ESPN and CONFIG.espn_league_id):
+    settings = _runtime_espn_config()
+    if not (_HAVE_ESPN and settings["league_id"]):
         reason = "ESPN package unavailable." if not _HAVE_ESPN else "ESPN_LEAGUE_ID is missing."
-        return _demo_snapshot(reason)
+        return _demo_snapshot(reason, season=settings["season"])
     try:
         lg = load_native_league()
         if lg is None:
-            return _demo_snapshot("ESPN client returned no league.")
+            return _demo_snapshot("ESPN client returned no league.", season=settings["season"])
         teams = [
             FantasyTeam(
                 team_id=t.team_id,
@@ -212,8 +252,8 @@ def load_league() -> LeagueSnapshot:
         except Exception:
             fas = []
         return LeagueSnapshot(
-            league_id=str(CONFIG.espn_league_id),
-            season=CONFIG.espn_season,
+            league_id=str(settings["league_id"]),
+            season=settings["season"],
             scoring_type=str(getattr(lg.settings, "scoring_type", "H2H Categories")),
             teams=teams,
             free_agents=fas,
@@ -227,12 +267,13 @@ def load_league() -> LeagueSnapshot:
             current_scoring_period=int(getattr(lg, "current_week", 0) or 0),
         )
     except Exception as exc:
-        return _demo_snapshot(str(exc))
+        return _demo_snapshot(str(exc), season=settings["season"])
 
 
 def load_free_agent_players(size: int = 100) -> List[FantasyPlayer]:
     """Return detailed ESPN free-agent rows when the native ESPN client is available."""
-    if not (_HAVE_ESPN and CONFIG.espn_league_id):
+    settings = _runtime_espn_config()
+    if not (_HAVE_ESPN and settings["league_id"]):
         return []
     try:
         lg = load_native_league()
@@ -282,7 +323,8 @@ def public_mlb_injury_map() -> dict[str, dict]:
 
 
 def player_news(name: str, limit: int = 3) -> List[dict]:
-    if not (_HAVE_ESPN and CONFIG.espn_league_id):
+    settings = _runtime_espn_config()
+    if not (_HAVE_ESPN and settings["league_id"]):
         return []
     try:
         lg = load_native_league()

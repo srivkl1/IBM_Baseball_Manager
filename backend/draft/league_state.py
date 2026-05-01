@@ -9,6 +9,19 @@ from backend.draft import simulator as sim
 
 
 def _human_index(league: espn_client.LeagueSnapshot) -> int:
+    try:
+        import streamlit as st
+        selected_id = st.session_state.get("selected_team_id")
+    except Exception:
+        selected_id = None
+    if selected_id not in (None, ""):
+        try:
+            selected_id = int(selected_id)
+            for idx, team in enumerate(league.teams):
+                if int(getattr(team, "team_id", -1)) == selected_id:
+                    return idx
+        except (TypeError, ValueError):
+            pass
     for idx, team in enumerate(league.teams):
         owner = (team.owner or "").strip().lower()
         if owner in {"you", "me", "my team"}:

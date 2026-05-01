@@ -50,14 +50,22 @@ def _round_by_round_board(log: list[dict]) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def _draft_setup_defaults():
+def _draft_setup_defaults(league_cache_key):
+    _ = league_cache_key
     league = espn_client.load_league()
     team_names = [team.name for team in league.teams if team.name]
     if not team_names:
         team_names = FALLBACK_TEAM_NAMES[:4]
 
     human_index = 0
+    selected_id = st.session_state.get("selected_team_id")
     for idx, team in enumerate(league.teams):
+        try:
+            if selected_id not in (None, "") and int(team.team_id) == int(selected_id):
+                human_index = idx
+                break
+        except (TypeError, ValueError):
+            pass
         owner = (team.owner or "").strip().lower()
         if owner in {"you", "me", "my team"}:
             human_index = idx
@@ -85,7 +93,7 @@ def _ensure_draft_state(team_names, human_index, rounds):
 
 def render():
     page_header("Draft Room", "Snake draft simulator powered by the 4-agent pipeline.")
-    defaults = _draft_setup_defaults()
+    defaults = _draft_setup_defaults(espn_client.runtime_league_cache_key())
 
     if defaults["has_existing_rosters"] and "draft_state" not in st.session_state:
         imported_state, bundle, _ = league_state.load_existing_league_state()
@@ -102,7 +110,7 @@ def render():
         if defaults["has_existing_rosters"]:
             st.caption("Loaded your existing ESPN rosters. Use restart only if you want to simulate a fresh draft.")
         elif defaults["source"] == "espn":
-            st.caption("Loaded team names from the ESPN league configured in `.env`.")
+            st.caption("Loaded team names from your current ESPN league connection.")
         else:
             st.caption("Using demo team names because ESPN league data is unavailable.")
         for i in range(int(n_teams)):

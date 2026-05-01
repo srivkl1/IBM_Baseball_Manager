@@ -63,6 +63,11 @@ def render():
             resp = ensure_pipeline().run(
                 user_text=user_text,
                 skill_level=skill,
+                context={
+                    "selected_team_id": st.session_state.get("selected_team_id"),
+                    "selected_team_name": st.session_state.get("selected_team_name"),
+                    "selected_team_owner": st.session_state.get("selected_team_owner"),
+                },
                 draft_state=st.session_state.get("draft_state"),
                 standings_table=st.session_state.get("standings_table"),
             )

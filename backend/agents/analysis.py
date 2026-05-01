@@ -390,9 +390,19 @@ class Analysis:
         )
 
     @staticmethod
-    def _my_team(league):
+    def _my_team(league, bundle: Optional[Dict[str, Any]] = None):
         if league is None or not getattr(league, "teams", None):
             return None
+        context = (bundle or {}).get("user_context", {}) or {}
+        selected_id = context.get("selected_team_id")
+        if selected_id not in (None, ""):
+            try:
+                selected_id = int(selected_id)
+                for team in league.teams:
+                    if int(getattr(team, "team_id", -1)) == selected_id:
+                        return team
+            except (TypeError, ValueError):
+                pass
         for team in league.teams:
             if (team.owner or "").strip().lower() in {"you", "me", "my team"}:
                 return team
@@ -465,7 +475,7 @@ class Analysis:
         pool: pd.DataFrame = bundle.get("player_pool")
         if pool is None or pool.empty:
             return self._missing_real_data_rec("team_diagnosis", bundle)
-        team = self._my_team(league)
+        team = self._my_team(league, bundle)
         roster = self._player_rows(team, pool) if pool is not None else pd.DataFrame()
         if roster.empty:
             return Recommendation("team_diagnosis", "No roster is loaded for diagnosis.")
@@ -499,7 +509,7 @@ class Analysis:
 
     def _analyze_trade_analysis(self, bundle: Dict[str, Any]) -> Recommendation:
         league = bundle.get("league")
-        my_team = self._my_team(league)
+        my_team = self._my_team(league, bundle)
         if league is None or my_team is None or len(getattr(league, "teams", [])) < 2:
             return Recommendation("trade_analysis", "Need at least two league teams to analyze trades.")
 
@@ -538,7 +548,7 @@ class Analysis:
         pool: pd.DataFrame = bundle.get("player_pool")
         if pool is None or pool.empty:
             return self._missing_real_data_rec("lineup_optimization", bundle)
-        team = self._my_team(league)
+        team = self._my_team(league, bundle)
         roster = self._player_rows(team, pool) if pool is not None else pd.DataFrame()
         if roster.empty:
             return Recommendation("lineup_optimization", "No roster is loaded for lineup optimization.")
@@ -573,7 +583,7 @@ class Analysis:
         pool: pd.DataFrame = bundle.get("player_pool")
         if pool is None or pool.empty:
             return self._missing_real_data_rec("risk_check", bundle)
-        team = self._my_team(league)
+        team = self._my_team(league, bundle)
         roster = self._player_rows(team, pool) if pool is not None else pd.DataFrame()
         if roster.empty:
             return Recommendation("risk_check", "No roster is loaded for risk review.")
@@ -635,6 +645,16 @@ class Analysis:
                 return rec
         if mlb_team_query:
             return self._analyze_mlb_team_roster(mlb_team_query)
+
+        league = bundle.get("league")
+        selected_team = self._my_team(league, bundle)
+        if selected_team is not None and any(
+            phrase in user_text.lower()
+            for phrase in ("my team", "my roster", "my lineup", "who do i have")
+        ):
+            rec = self._analyze_fantasy_team_roster(selected_team.name, league)
+            if rec is not None:
+                return rec
 
         if draft_state is None:
             return Recommendation(

@@ -78,6 +78,15 @@ def _render_scoring_breakdown(scoring_profile):
 
 
 def _my_team_name(state, league):
+    selected_id = st.session_state.get("selected_team_id")
+    if selected_id not in (None, ""):
+        try:
+            selected_id = int(selected_id)
+            for team in league.teams:
+                if int(getattr(team, "team_id", -1)) == selected_id:
+                    return team.name
+        except (TypeError, ValueError):
+            pass
     if state is not None and getattr(state, "teams", None):
         return state.teams[state.human_index]
     for team in league.teams:
@@ -232,6 +241,11 @@ def render():
             resp = ensure_pipeline().run(
                 user_text=f"What are my current standings as of {as_of}?",
                 skill_level=st.session_state.get("skill_level", "beginner"),
+                context={
+                    "selected_team_id": st.session_state.get("selected_team_id"),
+                    "selected_team_name": st.session_state.get("selected_team_name"),
+                    "selected_team_owner": st.session_state.get("selected_team_owner"),
+                },
                 standings_table=table,
             )
         recommendation_card(resp)

@@ -12,6 +12,15 @@ from frontend.theme import PALETTE, page_header
 
 
 def _default_team_index(teams) -> int:
+    selected_id = st.session_state.get("selected_team_id")
+    if selected_id not in (None, ""):
+        try:
+            selected_id = int(selected_id)
+            for idx, team in enumerate(teams):
+                if int(getattr(team, "team_id", -1)) == selected_id:
+                    return idx
+        except (TypeError, ValueError):
+            pass
     for idx, team in enumerate(teams):
         if (team.owner or "").strip().lower() in {"you", "me", "my team"}:
             return idx
