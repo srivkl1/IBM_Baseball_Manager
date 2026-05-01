@@ -54,7 +54,7 @@ def _rule_based_intent(text: str) -> tuple[str, float]:
         return "general_qa", 0.92
     if any(k in t for k in ("top", "best", "rank", "ranking", "list", "good", "elite")) and any(k in t for k in (
         "players", "draft picks", "picks", "catchers", "pitchers", "hitters",
-        "outfielders", "basemen", "shortstops", "starters", "relievers",
+        "outfielders", "infielders", "infield", "basemen", "shortstops", "starters", "relievers",
         "1b", "2b", "3b", "ss", "of", "sp", "rp",
     )):
         return "draft_pick", 0.88

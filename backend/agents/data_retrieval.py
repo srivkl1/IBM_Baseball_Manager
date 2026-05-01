@@ -23,6 +23,90 @@ from backend.draft.player_pool import build_pool
 from backend.models import draft_optimizer
 
 
+def _norm_name(name: str) -> str:
+    return str(name or "").strip().casefold()
+
+
+def _espn_role(position: str, eligible: list[str]) -> str:
+    positions = {str(position or "").upper(), *(str(pos or "").upper() for pos in eligible)}
+    return "PIT" if positions & {"SP", "RP", "P"} else "BAT"
+
+
+def _espn_player_pool(league: espn_client.LeagueSnapshot, free_agent_size: int = 500) -> pd.DataFrame:
+    """Build a real fantasy ranking pool from ESPN when advanced stats are unavailable."""
+    players = []
+    seen: set[str] = set()
+    for team in getattr(league, "teams", []):
+        for player in getattr(team, "roster", []):
+            key = _norm_name(player.name)
+            if key and key not in seen:
+                seen.add(key)
+                players.append((player, team.name, True))
+    for player in espn_client.load_free_agent_players(size=free_agent_size):
+        key = _norm_name(player.name)
+        if key and key not in seen:
+            seen.add(key)
+            players.append((player, "", False))
+
+    rows = []
+    for player, fantasy_team, rostered in players:
+        avg_points = float(player.avg_points or 0.0)
+        total_points = float(player.total_points or 0.0)
+        games = float(player.games_played or 0.0)
+        projected = float(player.projected_total_points or 0.0)
+        if not avg_points and games:
+            avg_points = total_points / games
+        if not projected:
+            projected = max(total_points, avg_points * max(games, 1.0))
+        position = espn_client.normalize_fantasy_position(player.fantasy_position)
+        eligible = [espn_client.normalize_fantasy_position(pos) for pos in player.eligible_positions]
+        rows.append({
+            "Name": player.name,
+            "Team": player.mlb_team,
+            "role": _espn_role(position, eligible),
+            "fantasy_position": position,
+            "positions_key": "|".join(sorted(set([position, *eligible]) - {""})),
+            "proj_pts": projected,
+            "draft_score": projected,
+            "recent_pts": total_points,
+            "avg_pts": avg_points,
+            "espn_total_points": total_points,
+            "espn_avg_points": avg_points,
+            "games_played": games,
+            "espn_projected_points": projected,
+            "rostership": float(player.rostership or 0.0),
+            "espn_injury_status": player.injury_status,
+            "espn_status": player.status,
+            "espn_lineup_slot": player.lineup_slot,
+            "fantasy_team": fantasy_team,
+            "is_rostered": rostered,
+        })
+    if not rows:
+        return pd.DataFrame()
+
+    pool = pd.DataFrame(rows)
+    penalties = pool.apply(
+        lambda row: _health_penalty(
+            row.get("espn_injury_status", ""),
+            row.get("espn_status", ""),
+            row.get("espn_lineup_slot", ""),
+        ),
+        axis=1,
+    )
+    pool["health_status"] = [label for label, _ in penalties]
+    pool["health_multiplier"] = [multiplier for _, multiplier in penalties]
+    pool["health_adjusted_proj_pts"] = pool["proj_pts"].fillna(0).astype(float) * pool["health_multiplier"]
+    pool = pool.sort_values("health_adjusted_proj_pts", ascending=False).reset_index(drop=True)
+    pool["rank"] = pool.index + 1
+    pool["proj_rank"] = pool["rank"]
+    pool["tier"] = pd.cut(
+        pool["rank"],
+        bins=[0, 12, 30, 60, 100, 150, 10_000],
+        labels=[1, 2, 3, 4, 5, 6],
+    ).astype(int)
+    return pool
+
+
 class DataRetrieval:
     def fetch(self, data_request: Dict[str, Any]) -> Dict[str, Any]:
         league = espn_client.load_league()
@@ -40,12 +124,20 @@ class DataRetrieval:
         if data_request.get("needs_player_pool", True):
             pool = build_pool(league.scoring_profile)
             if pool.empty:
-                bundle["player_pool"] = pool
+                espn_pool = _espn_player_pool(league)
+                bundle["player_pool"] = espn_pool
                 bundle["prospects"] = pyb.prospects(CONFIG.oot_season)
-                bundle["data_error"] = (
-                    "Real advanced-stat data is unavailable. Synthetic player pools are disabled "
-                    "to avoid showing false teams or projections."
-                )
+                if espn_pool.empty:
+                    bundle["data_error"] = (
+                        "Real advanced-stat data is unavailable, and ESPN did not return enough "
+                        "roster/free-agent data to build a ranking pool."
+                    )
+                else:
+                    bundle["data_source"] = "espn-fantasy"
+                    bundle["data_warning"] = (
+                        "Advanced-stat rankings were unavailable, so this answer uses real ESPN "
+                        "fantasy totals, averages, projections, roster status, and injury status."
+                    )
             else:
                 # Fold in ML projections for the OOT season (used for draft).
                 if league.scoring_profile.uses_points:

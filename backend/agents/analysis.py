@@ -189,7 +189,7 @@ class Analysis:
         list_words = ("top", "best", "rank", "ranking", "list", "good", "elite")
         subject_words = (
             "players", "draft picks", "picks", "catchers", "pitchers", "hitters",
-            "outfielders", "basemen", "shortstops", "starters", "relievers",
+            "outfielders", "infielders", "infielder", "infield", "basemen", "shortstops", "starters", "relievers",
             "1b", "2b", "3b", "ss", "of", "sp", "rp", "c",
         )
         return any(word in t for word in list_words) and any(word in t for word in subject_words)
@@ -203,6 +203,7 @@ class Analysis:
             (("second base", "second basemen", "2b"), {"2B"}),
             (("third base", "third basemen", "3b"), {"3B"}),
             (("shortstop", "shortstops", " ss "), {"SS"}),
+            (("infield", "infielder", "infielders"), {"C", "1B", "2B", "3B", "SS"}),
             (("outfield", "outfielder", "outfielders", " of "), {"OF"}),
             (("starting pitcher", "starting pitchers", "starter", "starters", "sp"), {"SP"}),
             (("relief pitcher", "relief pitchers", "reliever", "relievers", "closer", "closers", "rp"), {"RP"}),
